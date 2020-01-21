@@ -28,7 +28,7 @@ if (( $# < 3)); then
   echo "Usage: release.sh platform version upload mvn_parameters"
   echo "Usage example: bash release.sh linux default true"
   echo "Usage example: bash release.sh linux 0.6.0.dev0 true"
-  echo "If needed, you can also add other profiles such as: -Dspark.version=2.4.3 -Dbigdl.artifactId=bigdl-SPARK_2.4 -P spark_2.x"
+  echo "If needed, you can also add other profiles such as: -Dspark.version=2.4.3 -Dbigdl.artifactId=bigdl-SPARK_2.4 -P spark_2.4+"
   exit -1
 fi
 
@@ -60,6 +60,11 @@ fi
 build_command="${ANALYTICS_ZOO_HOME}/make-dist.sh ${dist_profile}"
 echo "Build command: ${build_command}"
 $build_command
+
+# delete org/tensorflow/util here
+export ANALYTICS_ZOO_JAR=`find ${ANALYTICS_ZOO_HOME}/dist/lib -type f -name "analytics-zoo*jar-with-dependencies.jar"`
+echo "analytics zoo jar location is at ${ANALYTICS_ZOO_JAR}"
+zip -d ${ANALYTICS_ZOO_JAR} org/tensorflow/util/*
 
 cd $ANALYTICS_ZOO_PYTHON_DIR
 sdist_command="python setup.py sdist"

@@ -18,19 +18,48 @@ package com.intel.analytics.zoo.common
 
 import java.io._
 import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.{Path => JPath}
 
-import com.intel.analytics.bigdl.utils.File
+import com.intel.analytics.bigdl.nn.abstractnn.Activity
+import com.intel.analytics.bigdl.tensor.Tensor
 import org.apache.commons.io.filefilter.WildcardFileFilter
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{FileSystem, Path}
-import java.nio.file.{Path => JPath}
+import org.apache.hadoop.fs.{FSDataInputStream, FSDataOutputStream, FileSystem, Path}
+import org.apache.hadoop.io.IOUtils
 import org.apache.log4j.Logger
+import org.apache.spark.rdd.RDD
 
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 
 private[zoo] object Utils {
 
   private val logger = Logger.getLogger(getClass)
+
+  @inline
+  def timeIt[T](name: String)(f: => T): T = {
+    val begin = System.nanoTime()
+    val result = f
+    val end = System.nanoTime()
+    val cost = end - begin
+    logger.debug(s"$name time [${cost / 1.0e9} s].")
+    result
+  }
+
+  def activity2VectorBuilder(data: Activity):
+  mutable.Builder[Tensor[_], Vector[Tensor[_]]] = {
+    val vec = Vector.newBuilder[Tensor[_]]
+    if (data.isTensor) {
+      vec += data.asInstanceOf[Tensor[_]]
+    } else {
+      var i = 0
+      while (i < data.toTable.length()) {
+        vec += data.toTable(i + 1)
+        i += 1
+      }
+    }
+    vec
+  }
 
   def listLocalFiles(path: String): Array[File] = {
     val files = new ArrayBuffer[File]()
@@ -94,7 +123,18 @@ private[zoo] object Utils {
    * @return Array[Byte]
    */
   def readBytes(path: String): Array[Byte] = {
-    File.readBytes(path)
+    var fs: FileSystem = null
+    var in: FSDataInputStream = null
+    try {
+      fs = getFileSystem(path)
+      in = fs.open(new Path(path))
+      val byteArrayOut = new ByteArrayOutputStream()
+      IOUtils.copyBytes(in, byteArrayOut, 1024, true)
+      byteArrayOut.toByteArray
+    } finally {
+      if (null != in) in.close()
+      if (null != fs) fs.close()
+    }
   }
 
   /**
@@ -132,7 +172,7 @@ private[zoo] object Utils {
    *                    get from cache (may shared with our connections)
    * @return hadoop.fs.FileSystem
    */
-  def getFileSystem(fileName: String, newInstance: Boolean = false): FileSystem = {
+  def getFileSystem(fileName: String, newInstance: Boolean = true): FileSystem = {
     if (newInstance) {
       FileSystem.newInstance(new Path(fileName).toUri, new Configuration())
     } else {
@@ -183,7 +223,16 @@ private[zoo] object Utils {
    * @param isOverwrite Overwrite exiting file or not
    */
   def saveBytes(bytes: Array[Byte], fileName: String, isOverwrite: Boolean = false): Unit = {
-    File.saveBytes(bytes, fileName, isOverwrite)
+    var fs: FileSystem = null
+    var out: FSDataOutputStream = null
+    try {
+      fs = getFileSystem(fileName)
+      out = fs.create(new Path(fileName), isOverwrite)
+      IOUtils.copyBytes(new ByteArrayInputStream(bytes), out, 1024, true)
+    } finally {
+      if (null != out) out.close()
+      if (null != fs) fs.close()
+    }
   }
 
   def logUsageErrorAndThrowException(errMessage: String, cause: Throwable = null): Unit = {
@@ -203,4 +252,6 @@ class AnalyticsZooException(message: String, cause: Throwable)
 
   def this(message: String) = this(message, null)
 }
+
+case class RDDWrapper[T](value: RDD[T])
 

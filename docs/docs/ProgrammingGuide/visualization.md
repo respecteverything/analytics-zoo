@@ -1,6 +1,4 @@
-# *Visualization*
 
----
 
 ## Generating Summary
 To enable visualization support, you need first properly configure to collect statistics summary in different stages of training. It should be done before the training starts. See examples below: 
@@ -111,9 +109,9 @@ With the summary info generated, we can then use [TensorBoard](https://pypi.pyth
 
 Prerequisites:
 
-1. Python verison: 2.7, 3.4, 3.5, or 3.6
+1. Python version: 3.5 or 3.6
 2. Pip version >= 9.0.1
-3. tensorflow 1.13.1
+3. TensorFlow 1.13.1
 
 ### *Launching TensorBoard*
 

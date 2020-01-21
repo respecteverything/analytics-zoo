@@ -2,8 +2,8 @@
 Based on Streaming example NetworkWordCount and Zoo text classification example. Network inputs (Strings) are pre-processed and classified by zoo. We applied a simple text classification model based on zoo example.
 
 ## Environment
-* Python (2.7, 3.5 or 3.6)
-* Apache Spark 1.6.0/2.1.0 (This version needs to be same with the version you use to build Analytics Zoo)
+* Python 3.5/3.6
+* Apache Spark 2.x (This version needs to be same with the version you use to build Analytics Zoo)
 * Analytics Zoo ([install analytics-zoo]((https://analytics-zoo.github.io/master/#PythonUserGuide/install/) ) via __pip__ or __download the prebuilt package__.)
 
 ## Datasets and pre-trained models
@@ -23,7 +23,7 @@ MASTER=...
 model=... // model path. Local file system/HDFS/Amazon S3 are supported
 index_path=... // word index path. Local file system/HDFS/Amazon S3 are supported
 port=... // The same port with nc command
-${ANALYTICS_ZOO_HOME}/bin/spark-submit-with-zoo.sh \
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
     --master ${MASTER} \
     --driver-memory 2g \
     --executor-memory 5g \

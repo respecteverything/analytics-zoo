@@ -24,6 +24,7 @@ from setuptools import setup
 
 TEMP_PATH = "zoo/share"
 analytics_zoo_home = os.path.abspath(__file__ + "/../../")
+SCRIPTS_TARGET = os.path.join(TEMP_PATH, "bin/cluster-serving")
 
 
 def get_analytics_zoo_packages():
@@ -85,23 +86,28 @@ def init_env():
 
 
 def setup_package():
+    script_names = os.listdir(SCRIPTS_TARGET)
+    scripts = list(map(lambda script: os.path.join(SCRIPTS_TARGET, script), script_names))
+
     metadata = dict(
         name='analytics-zoo',
         version=VERSION,
-        description='Distributed Tensorflow, Keras and BigDL on Apache Spark',
+        description='A unified Data Analytics and AI platform for distributed TensorFlow, Keras, '
+                    'PyTorch, Apache Spark/Flink and Ray',
         author='Analytics Zoo Authors',
         author_email='bigdl-user-group@googlegroups.com',
         license='Apache License, Version 2.0',
         url='https://github.com/intel-analytics/analytics-zoo',
         packages=packages,
-        install_requires=['pyspark==2.4.3', 'bigdl==0.9.0', 'conda-pack==0.3.1'],
+        install_requires=['pyspark==2.4.3', 'bigdl==0.10.0', 'conda-pack==0.3.1'],
+        extras_require={'ray': ['ray>=0.6.6', 'psutil', 'aiohttp', 'setproctitle']},
         dependency_links=['https://d3kbcqa49mib13.cloudfront.net/spark-2.0.0-bin-hadoop2.7.tgz'],
         include_package_data=True,
         package_data={"zoo.share": ['lib/analytics-zoo*with-dependencies.jar', 'conf/*', 'bin/*',
                                     'extra-resources/*']},
+        scripts=scripts,
         classifiers=[
             'License :: OSI Approved :: Apache Software License',
-            'Programming Language :: Python :: 2.7',
             'Programming Language :: Python :: 3',
             'Programming Language :: Python :: 3.5',
             'Programming Language :: Python :: 3.6',

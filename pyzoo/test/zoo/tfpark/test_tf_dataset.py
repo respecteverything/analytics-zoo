@@ -18,6 +18,8 @@ import pytest
 from zoo.feature.common import ChainedPreprocessing, FeatureSet
 from zoo.feature.image import *
 from test.zoo.pipeline.utils.test_utils import ZooTestCase
+from zoo.pipeline.api.keras.optimizers import Adam
+from zoo.pipeline.api.net import TFNet, TFOptimizer
 import tensorflow as tf
 import numpy as np
 import os
@@ -27,7 +29,39 @@ from zoo.tfpark import KerasModel, TFDataset
 resource_path = os.path.join(os.path.split(__file__)[0], "../resources")
 
 
-class TestTFParkModel(ZooTestCase):
+def single_parse_fn(e):
+    keys_to_features = {
+        'image/encoded': tf.FixedLenFeature((), tf.string, default_value=''),
+        'image/format': tf.FixedLenFeature((), tf.string, default_value='raw'),
+        'image/class/label': tf.FixedLenFeature(
+            [1], tf.int64, default_value=tf.zeros([1], dtype=tf.int64)),
+    }
+    items_to_handlers = {
+        'image': tf.contrib.slim.tfexample_decoder.Image(shape=[28, 28, 1], channels=1),
+        'label': tf.contrib.slim.tfexample_decoder.Tensor('image/class/label', shape=[]),
+    }
+    decoder = tf.contrib.slim.tfexample_decoder.TFExampleDecoder(
+        keys_to_features, items_to_handlers)
+    results = decoder.decode(e)
+    if len(results[0].shape) > 0:
+        feature = results[0]
+        label = results[1]
+    else:
+        feature = results[1]
+        label = results[0]
+    return feature, label
+
+
+def parse_fn(example):
+    results = tf.map_fn(single_parse_fn, example, dtype=(tf.uint8, tf.int64))
+    return tf.to_float(results[0]), results[1]
+
+
+class TestTFDataset(ZooTestCase):
+
+    def setup_method(self, method):
+        tf.keras.backend.clear_session()
+        super(TestTFDataset, self).setup_method(method)
 
     def create_model(self):
         data = tf.keras.layers.Input(shape=[10])
@@ -138,6 +172,7 @@ class TestTFParkModel(ZooTestCase):
                                                                    target_keys=["label"])
                                                   ])
         feature_set = feature_set.transform(train_transformer)
+        feature_set = feature_set.transform(ImageFeatureToSample())
         return feature_set
 
     def test_training_for_imageset(self):
@@ -225,52 +260,31 @@ class TestTFParkModel(ZooTestCase):
         for idx, tensor in enumerate(dataset.feature_tensors):
             assert tensor.name == "list_input_" + str(idx) + ":0"
 
+    def test_tfdataset_with_string_rdd(self):
+        string_rdd = self.sc.parallelize(["123", "456"], 1)
+        ds = TFDataset.from_string_rdd(string_rdd, batch_per_thread=1)
+        input_tensor = tf.placeholder(dtype=tf.string, shape=(None,))
+        output_tensor = tf.string_to_number(input_tensor)
+        with tf.Session() as sess:
+            tfnet = TFNet.from_session(sess, inputs=[input_tensor], outputs=[output_tensor])
+        result = tfnet.predict(ds).collect()
+        assert result[0] == 123
+        assert result[1] == 456
+
     def test_tfdataset_with_tfrecord(self):
-        model = tf.keras.Sequential(
-            [tf.keras.layers.Flatten(input_shape=(28, 28, 1)),
-             tf.keras.layers.Dense(10, activation='softmax'),
-             ]
-        )
-
-        model.compile(optimizer='rmsprop',
-                      loss='sparse_categorical_crossentropy',
-                      metrics=['accuracy'])
-
-        keras_model = KerasModel(model)
-
-        def parse_fn(example):
-            keys_to_features = {
-                'image/encoded': tf.FixedLenFeature((), tf.string, default_value=''),
-                'image/format': tf.FixedLenFeature((), tf.string, default_value='raw'),
-                'image/class/label': tf.FixedLenFeature(
-                    [1], tf.int64, default_value=tf.zeros([1], dtype=tf.int64)),
-            }
-
-            items_to_handlers = {
-                'image': tf.contrib.slim.tfexample_decoder.Image(shape=[28, 28, 1], channels=1),
-                'label': tf.contrib.slim.tfexample_decoder.Tensor('image/class/label', shape=[]),
-            }
-
-            decoder = tf.contrib.slim.tfexample_decoder.TFExampleDecoder(
-                keys_to_features, items_to_handlers)
-            results = decoder.decode(example)
-
-            if len(results[0].shape) > 0:
-                feature = results[0]
-                label = results[1]
-            else:
-                feature = results[1]
-                label = results[0]
-
-            return feature, label
-
         train_path = os.path.join(resource_path, "tfrecord/mnist_train.tfrecord")
         test_path = os.path.join(resource_path, "tfrecord/mnist_test.tfrecord")
-        dataset = TFDataset.from_tfrecord(train_path,
-                                          parse_fn=parse_fn, batch_size=8,
-                                          validation_file_path=test_path)
+        dataset = TFDataset.from_tfrecord_file(self.sc, train_path,
+                                               batch_size=8,
+                                               validation_file_path=test_path)
+        dataset = dataset.map(lambda x: parse_fn(x[0]))
+        flat = tf.layers.flatten(dataset.feature_tensors)
+        logits = tf.layers.dense(flat, 10)
+        labels = dataset.label_tensors
+        loss = tf.reduce_mean(tf.losses.sparse_softmax_cross_entropy(logits=logits, labels=labels))
 
-        keras_model.fit(dataset)
+        opt = TFOptimizer.from_loss(loss, Adam())
+        opt.optimize()
 
 
 if __name__ == "__main__":

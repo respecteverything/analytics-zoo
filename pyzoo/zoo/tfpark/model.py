@@ -22,7 +22,6 @@ from zoo.common.nncontext import getOrCreateSparkContext
 from zoo.pipeline.api.keras.utils import to_bigdl_metric
 from zoo.pipeline.api.net import TFDataset, TFOptimizer, TFPredictor, TFNet
 import tensorflow.keras.backend as K
-import tensorflow as tf
 import numpy as np
 
 from zoo.pipeline.api.net.tf_dataset import TFNdarrayDataset
@@ -144,7 +143,8 @@ class KerasModel(object):
             self._fit_distributed(x, validation_split, epochs, **kwargs)
 
         elif distributed:
-            dataset = TFDataset.from_ndarrays((x, y), val_tensors=validation_data)
+            dataset = TFDataset.from_ndarrays((x, y), val_tensors=validation_data,
+                                              batch_size=batch_size)
             self._fit_distributed(dataset, validation_split, epochs, **kwargs)
 
         else:
@@ -159,7 +159,7 @@ class KerasModel(object):
 
     def _fit_distributed(self, dataset, validation_split, epochs, **kwargs):
         self.tf_optimizer = TFOptimizer.from_keras(self.model, dataset,
-                                                   val_spilt=validation_split, **kwargs)
+                                                   val_split=validation_split, **kwargs)
 
         if self.train_summary is not None:
             self.tf_optimizer.set_train_summary(self.train_summary)

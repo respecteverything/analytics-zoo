@@ -9,8 +9,7 @@ Follow the instructions [here](https://analytics-zoo.github.io/master/#PythonUse
 
 [OpenVINO System requirements](https://software.intel.com/en-us/openvino-toolkit/documentation/system-requirements):
 
-    Ubuntu 16.04.3 LTS (64 bit)
-    Windows 10 (64 bit)
+    Ubuntu 18.04 LTS (64 bit)
     CentOS 7.4 (64 bit)
     macOS 10.13, 10.14 (64 bit)
 
@@ -50,7 +49,7 @@ MASTER=local[*]
 image_path=directory path that contain images
 model_path=dir contains frozen_inference_graph.pb and pipeline.config
 
-${ANALYTICS_ZOO_HOME}/bin/spark-submit-with-zoo.sh \
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
     --master $MASTER \
     --driver-memory 10g \
     --executor-memory 10g \

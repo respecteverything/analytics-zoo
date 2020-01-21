@@ -15,8 +15,6 @@
 #
 import pytest
 
-from zoo.feature.common import ChainedPreprocessing, FeatureSet
-from zoo.feature.image import *
 from zoo.pipeline.api.net import TFOptimizer
 from test.zoo.pipeline.utils.test_utils import ZooTestCase
 import tensorflow as tf
@@ -29,6 +27,10 @@ resource_path = os.path.join(os.path.split(__file__)[0], "../resources")
 
 
 class TestTFParkModel(ZooTestCase):
+
+    def setup_method(self, method):
+        tf.keras.backend.clear_session()
+        super(TestTFParkModel, self).setup_method(method)
 
     def create_model(self):
         data = tf.keras.layers.Input(shape=[10])
@@ -110,9 +112,7 @@ class TestTFParkModel(ZooTestCase):
         rdd = rdd.map(lambda x: [x])
 
         dataset = TFDataset.from_rdd(rdd,
-                                     names=["features"],
-                                     shapes=[[10]],
-                                     types=[tf.float32],
+                                     features=(tf.float32, [10]),
                                      batch_per_thread=1
                                      )
         return dataset
@@ -164,18 +164,6 @@ class TestTFParkModel(ZooTestCase):
         val_x, val_y = self.create_training_data()
 
         model.fit(x, y, validation_data=(val_x, val_y), batch_size=4, distributed=True)
-
-    def test_training_with_validation_data_distributed_multi_heads(self):
-
-        keras_model = self.create_multi_input_output_model()
-        model = KerasModel(keras_model)
-
-        x, y = self.create_training_data()
-
-        val_x, val_y = self.create_training_data()
-
-        model.fit([x, x], [y, y], validation_data=([val_x, val_x], [val_y, val_y]),
-                  batch_size=4, distributed=True)
 
     def test_training_and_validation_with_dataset(self):
         keras_model = self.create_model()

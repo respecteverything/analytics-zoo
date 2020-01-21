@@ -18,10 +18,9 @@ import importlib
 import os
 import sys
 
-from bigdl.util.common import callBigDlFunc
+from zoo.common.utils import callZooFunc
 from bigdl.nn.layer import Model as BModel
 from zoo.pipeline.api.net.graph_net import GraphNet
-
 
 if sys.version >= '3':
     long = int
@@ -32,9 +31,9 @@ class JavaToPython:
     # TODO: Add more mapping here as it only support Model and Sequential for now.
     def __init__(self, jvalue, bigdl_type="float"):
         self.jvaule = jvalue
-        self.jfullname = callBigDlFunc(bigdl_type,
-                                       "getRealClassNameOfJValue",
-                                       jvalue)
+        self.jfullname = callZooFunc(bigdl_type,
+                                     "getRealClassNameOfJValue",
+                                     jvalue)
 
     def get_python_class(self):
         """
@@ -83,7 +82,7 @@ class Net:
         :param weight_path: The path to the weights of the pre-trained model. Default is None.
         :return: A pre-trained model.
         """
-        jmodel = callBigDlFunc(bigdl_type, "netLoadBigDL", model_path, weight_path)
+        jmodel = callZooFunc(bigdl_type, "netLoadBigDL", model_path, weight_path)
         return GraphNet.from_jvalue(jmodel)
 
     @staticmethod
@@ -98,7 +97,7 @@ class Net:
         :param weight_path: The path for pre-trained weights if any. Default is None.
         :return: An Analytics Zoo model.
         """
-        jmodel = callBigDlFunc(bigdl_type, "netLoad", model_path, weight_path)
+        jmodel = callZooFunc(bigdl_type, "netLoad", model_path, weight_path)
         return Net.from_jvalue(jmodel, bigdl_type)
 
     @staticmethod
@@ -109,32 +108,7 @@ class Net:
         :param path: The path containing the pre-trained model.
         :return: A pre-trained model.
         """
-        jmodel = callBigDlFunc(bigdl_type, "netLoadTorch", path)
-        return GraphNet.from_jvalue(jmodel, bigdl_type)
-
-    @staticmethod
-    def load_tf(path, inputs=None, outputs=None, byte_order="little_endian",
-                bin_file=None, bigdl_type="float"):
-        """
-        Load a pre-trained TensorFlow model.
-        :param path: The path containing the pre-trained model.
-                     OR alternatively, the exported folder path from `export_tf`.
-                     In this case, path should contain 'frozen_inference_graph.pb' and
-                     'graph_meta.json'. You don't need to specify inputs and outputs.
-        :param inputs: The input nodes of this graph.
-        :param outputs: The output nodes of this graph.
-        :param byte_order: Byte_order of the file, `little_endian` or `big_endian`.
-        :param bin_file: Optional bin file produced by bigdl dump_model util function
-                         to store the weights. Default is None.
-        :return: A pre-trained model.
-        """
-        if not inputs and not outputs:  # load_tf from exported folder
-            if not os.path.isdir(path):
-                raise ValueError("load_tf from exported folder requires path to be a folder")
-            jmodel = callBigDlFunc(bigdl_type, "netLoadTF", path)
-        else:
-            jmodel = callBigDlFunc(bigdl_type, "netLoadTF", path, inputs, outputs,
-                                   byte_order, bin_file)
+        jmodel = callZooFunc(bigdl_type, "netLoadTorch", path)
         return GraphNet.from_jvalue(jmodel, bigdl_type)
 
     @staticmethod
@@ -146,7 +120,7 @@ class Net:
         :param model_path: The path containing the pre-trained caffe model.
         :return: A pre-trained model.
         """
-        jmodel = callBigDlFunc(bigdl_type, "netLoadCaffe", def_path, model_path)
+        jmodel = callZooFunc(bigdl_type, "netLoadCaffe", def_path, model_path)
         return GraphNet.from_jvalue(jmodel, bigdl_type)
 
     @staticmethod

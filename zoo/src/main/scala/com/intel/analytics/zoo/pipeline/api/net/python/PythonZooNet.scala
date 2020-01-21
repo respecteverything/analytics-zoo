@@ -15,32 +15,29 @@
  */
 package com.intel.analytics.zoo.pipeline.api.net.python
 
-import java.nio.{ByteOrder, FloatBuffer}
-import java.util.{List => JList}
+import java.nio.FloatBuffer
+import java.util.concurrent.{CopyOnWriteArrayList, TimeUnit}
+import java.util.{ArrayList, List => JList}
 
+import com.intel.analytics.bigdl.Module
 import com.intel.analytics.bigdl.nn.abstractnn.{AbstractModule, Activity}
 import com.intel.analytics.bigdl.nn.keras.KerasLayer
-import com.intel.analytics.bigdl.optim.{OptimMethod, Optimizer, Trigger, ValidationMethod}
+import com.intel.analytics.bigdl.optim._
 import com.intel.analytics.bigdl.python.api.{JTensor, Sample}
 import com.intel.analytics.bigdl.tensor.Tensor
 import com.intel.analytics.bigdl.tensor.TensorNumericMath.TensorNumeric
-import com.intel.analytics.zoo.common.PythonZoo
+import com.intel.analytics.zoo.common.{PythonZoo, RDDWrapper}
 import com.intel.analytics.zoo.pipeline.api.Net
 import com.intel.analytics.zoo.pipeline.api.net._
-import com.intel.analytics.bigdl.dataset.{Sample => JSample}
+import com.intel.analytics.zoo.tfpark._
+import org.apache.log4j.{Level, Logger}
 import org.apache.spark.api.java.{JavaRDD, JavaSparkContext}
 import org.apache.spark.rdd.RDD
+import org.tensorflow.{Graph, Session, Tensor => TTensor}
 
 import scala.collection.JavaConverters._
-import scala.io.Source
 import scala.reflect.ClassTag
-import scala.reflect.io.Path
-import scala.collection.mutable.ListBuffer
-import java.util.ArrayList
-import java.util.concurrent.{CopyOnWriteArrayList, TimeUnit}
 
-import org.apache.log4j.{Level, Logger}
-import org.tensorflow.{DataType, Graph, Session, Tensor => TTensor}
 
 object PythonZooNet {
 
@@ -85,20 +82,6 @@ class PythonZooNet[T: ClassTag](implicit ev: TensorNumeric[T]) extends PythonZoo
     Net.loadTorch[T](path)
   }
 
-  def netLoadTF(path: String, inputs: JList[String], outputs: JList[String],
-      byteOrder: String, binFile: String = null): AbstractModule[Activity, Activity, T] = {
-    val order = byteOrder match {
-      case "little_endian" => ByteOrder.LITTLE_ENDIAN
-      case "big_endian" => ByteOrder.BIG_ENDIAN
-      case _ => throw new IllegalArgumentException(s"No support byte order $byteOrder")
-    }
-    Net.loadTF[T](path, inputs.asScala, outputs.asScala, order, Option(binFile))
-  }
-
-  def netLoadTF(folder: String): AbstractModule[Activity, Activity, T] = {
-    Net.loadTF[T](folder)
-  }
-
   def netToKeras(value: NetUtils[T, _]): KerasLayer[Activity, Activity, T] = {
     value.toKeras()
   }
@@ -121,13 +104,41 @@ class PythonZooNet[T: ClassTag](implicit ev: TensorNumeric[T]) extends PythonZoo
     TFNet(path)
   }
 
+  def createTFNetFromSavedModel(path: String,
+                                tag: String,
+                                inputNames: JList[String],
+                                outputNames: JList[String],
+                                config: Array[Byte]): Module[Float] = {
+    if (config == null) {
+      TFNet.fromSavedModel(path, tag, inputNames.asScala.toArray, outputNames.asScala.toArray)
+    } else {
+      TFNetForInference.fromSavedModel(path, Option(tag), None,
+        Option(inputNames.asScala.toArray), Option(outputNames.asScala.toArray), config)
+    }
+  }
+
+  def createTFNetFromSavedModel(path: String,
+                                tag: String,
+                                signature: String,
+                                config: Array[Byte]): Module[Float] = {
+    if (config == null) {
+      TFNet.fromSavedModel(path, tag, signature)
+    } else {
+      TFNetForInference.fromSavedModel(path, Option(tag), Option(signature),
+        None, None, config)
+    }
+  }
 
   def createTFNet(path: String, config: Array[Byte]): TFNet = {
     TFNet(path, config)
   }
 
-  def createTFTrainingHelper(modelPath: String, config: Array[Byte] = null): TFTrainingHelper = {
+  def createTFTrainingHelper(modelPath: String, config: Array[Byte] = null): Module[Float] = {
     TFTrainingHelper(modelPath, config)
+  }
+
+  def saveCheckpoint(model: TFTrainingHelper): Unit = {
+    model.saveCheckpoint()
   }
 
   def createIdentityCriterion(): IdentityCriterion = {
@@ -138,21 +149,39 @@ class PythonZooNet[T: ClassTag](implicit ev: TensorNumeric[T]) extends PythonZoo
     new MergeFeatureLabel()
   }
 
-  def createMergeFeatureLabelFeatureTransformer(): MergeFeatureLabel = {
-    new MergeFeatureLabel()
+  def createMergeFeatureLabelFeatureTransformer(): MergeFeatureLabelFeatureTransformer = {
+    new MergeFeatureLabelFeatureTransformer()
   }
 
-  def createTFValidationMethod(validationMethod: ValidationMethod[Float],
-                               outputLength: Int, targetLength: Int): TFValidationMethod = {
-    new TFValidationMethod(validationMethod, outputLength, targetLength)
+  def createTFValidationMethod(valMethod: ValidationMethod[Float], name: String,
+                               outputIndices: java.util.List[Int],
+                               labelIndices: java.util.List[Int]): TFValidationMethod = {
+    new TFValidationMethod(valMethod, name, outputIndices, labelIndices)
   }
 
-  def createTFOptimizer(modelPath: String,
-                        optimMethod: OptimMethod[Float],
-                        x: JavaRDD[Sample],
-                        batchSize: Int = 32): TFOptimizer = {
-    new TFOptimizer(modelPath, optimMethod,
-      toJSample(x).asInstanceOf[RDD[JSample[Float]]], batchSize)
+  def createStatelessMetric(name: String, idx: Int): StatelessMetric = {
+    new StatelessMetric(name, idx)
+  }
+
+  def createGanOptimMethod(dOptim: OptimMethod[T],
+                           gOptim: OptimMethod[T],
+                           dStep: Int, gStep: Int, gParamSize: Int): OptimMethod[T] = {
+    new GanOptimMethod[T](dOptim, gOptim, dStep, gStep, gParamSize)
+  }
+
+
+
+  def createMiniBatchRDDFromStringRDD(stringRDD: JavaRDD[Array[Byte]],
+                                     batchSize: Int): RDDWrapper[StringMiniBatch[T]] = {
+    import TFTensorNumeric.NumericByteArray
+
+    val rdd = stringRDD.rdd.mapPartitions { stringIter =>
+      stringIter.grouped(batchSize).map { data =>
+        val tensor = Tensor[Array[Byte]](data.toArray, shape = Array(data.length))
+        new StringMiniBatch[T](tensor)
+      }
+    }
+    RDDWrapper[StringMiniBatch[T]](rdd)
   }
 
   def createRDDFromTFRecords(path: String,
@@ -285,6 +314,10 @@ class PythonZooNet[T: ClassTag](implicit ev: TensorNumeric[T]) extends PythonZoo
 
   def createTorchCriterion(lossPath: String): TorchCriterion = {
     TorchCriterion(lossPath)
+  }
+
+  def torchNetSavePytorch(torchnet: TorchNet, path: String): Unit = {
+    torchnet.savePytorch(path)
   }
 
 }

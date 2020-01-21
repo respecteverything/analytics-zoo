@@ -22,12 +22,13 @@ import com.intel.analytics.bigdl.Module
 import com.intel.analytics.bigdl.nn.abstractnn.{AbstractModule, Activity}
 import com.intel.analytics.bigdl.tensor.Tensor
 import com.intel.analytics.bigdl.tensor.TensorNumericMath.TensorNumeric
-import com.intel.analytics.bigdl.utils.{MultiShape, Shape, T}
+import com.intel.analytics.bigdl.utils.T
+import com.intel.analytics.zoo.common.Utils
 import com.intel.analytics.zoo.core.TFNetNative
 import com.intel.analytics.zoo.pipeline.api.Predictable
 import com.intel.analytics.zoo.pipeline.api.net.TFNet.TFGraphHolder
+import com.intel.analytics.zoo.tfpark.{TFResourceManager, TFUtils}
 import org.tensorflow.framework.GraphDef
-import org.tensorflow.types.UInt8
 import org.tensorflow.{DataType, Graph, Session, Tensor => TTensor}
 
 import scala.collection.JavaConverters._
@@ -50,68 +51,16 @@ import scala.reflect.ClassTag
  * @param graphDef serialized representation of a graph
  */
 class TFNet(private val graphDef: TFGraphHolder,
-                    val graphMeta: Meta,
-                    config: Array[Int])
+            val graphMeta: Meta,
+            config: Array[Int])
   extends AbstractModule[Activity, Activity, Float] with Predictable[Float] {
 
   protected val module: Module[Float] = this
   implicit val ev = TensorNumeric.NumericFloat
   implicit val tag: ClassTag[Float] = ClassTag.Float
 
-  class ResourceManager() extends java.io.Serializable {
-    private val tensorList: mutable.Set[TTensor[_]] = mutable.Set[TTensor[_]]()
-    def createTFTensor(shape: Array[Long], buffer: FloatBuffer): TTensor[_] = {
-      val TFTensor : TTensor[_] = TTensor.create(shape, buffer)
-      tensorList += TFTensor
-      return TFTensor
-    }
-    def createTFTensor(shape: Array[Long], buffer: ByteBuffer): TTensor[_] = {
-      val TFTensor : TTensor[_] = TTensor.create(classOf[UInt8], shape, buffer)
-      tensorList += TFTensor
-      return TFTensor
-    }
-    def createTFTensor(shape: Array[Long], buffer: IntBuffer): TTensor[_] = {
-      val TFTensor : TTensor[_] = TTensor.create(shape, buffer)
-      tensorList += TFTensor
-      return TFTensor
-    }
-    def createTFTensor(shape: Array[Long], buffer: LongBuffer): TTensor[_] = {
-      val TFTensor : TTensor[_] = TTensor.create(shape, buffer)
-      tensorList += TFTensor
-      return TFTensor
-    }
-    def createTFTensor(shape: Array[Long], buffer: DoubleBuffer): TTensor[_] = {
-      val TFTensor : TTensor[_] = TTensor.create(shape, buffer)
-      tensorList += TFTensor
-      return TFTensor
-    }
-
-    def createBoolTFTensor(shape: Array[Long], bytes: ByteBuffer): TTensor[_] = {
-      val TFTensor : TTensor[_] = TTensor.create(classOf[java.lang.Boolean], shape, bytes)
-      tensorList += TFTensor
-      return TFTensor
-    }
-
-    def releaseTensor(t: TTensor[_]): Unit = {
-      t.close()
-      tensorList -= t
-    }
-
-    def isEmpty: Boolean = {
-      tensorList.isEmpty
-    }
-
-    def destructTFTensors(): Unit = {
-      for (tensor <- tensorList) {
-        tensor.close()
-      }
-
-      tensorList.clear()
-    }
-  }
-
   @transient
-  private lazy val tensorManager = new ResourceManager()
+  private lazy val tensorManager = new TFResourceManager()
 
   private[zoo] def graph = graphDef.tfGraph.graph
 
@@ -149,11 +98,11 @@ class TFNet(private val graphDef: TFGraphHolder,
 
     if (graphMeta.variables.isDefined) {
       val ws = new Array[Tensor[Float]](graphMeta.variables.get.length)
-        var i = 0
-        while (i < ws.length) {
-          ws(i) = Tensor[Float]()
-          i += 1
-        }
+      var i = 0
+      while (i < ws.length) {
+        ws(i) = Tensor[Float]()
+        i += 1
+      }
       setWeights(ws)
     } else {
       Array[Tensor[Float]]()
@@ -223,84 +172,82 @@ class TFNet(private val graphDef: TFGraphHolder,
 
   override def updateOutput(input: Activity): Activity = {
     try {
-      val start = System.nanoTime()
-      val runner = sess.runner()
 
-      require(activityLength(input) == inputTypes.length,
-        s"require ${inputTypes.length} inputs, but ${activityLength(input)} given. " +
-          s"The inputs are ${inputNames.toSeq}")
+      Utils.timeIt("TFNet.updateOutput") {
+        val runner = sess.runner()
 
-      activity2TFTensors(input, inputTypes, inputTFTensors)
+        require(activityLength(input) == inputTypes.length,
+          s"require ${inputTypes.length} inputs, but ${activityLength(input)} given. " +
+            s"The inputs are ${inputNames.toSeq}")
 
-      // feed inputs
-      inputNames.zipWithIndex.foreach { case (name, idx) =>
-        runner.feed(name, inputTFTensors(idx))
-      }
+        tensorManager.tensor2TFTensors(activity2Seq(input), inputTypes, inputTFTensors)
 
-      // feed new weights if possible
-      graphMeta.variables.map { variableNames =>
-        if (! this.isTraining()) {
-          var i = 0
-          while (i < variableNames.length) {
-            if (weightTFTensors(i) == null) {
-              val tensor = bigdl2Tf(weights(i), DataType.FLOAT)
+        // feed inputs
+        inputNames.zipWithIndex.foreach { case (name, idx) =>
+          runner.feed(name, inputTFTensors(idx))
+        }
+
+        // feed new weights if possible
+        graphMeta.variables.map { variableNames =>
+          if (!this.isTraining()) {
+            var i = 0
+            while (i < variableNames.length) {
+              if (weightTFTensors(i) == null) {
+                val tensor = tensorManager.bigdl2Tf(weights(i), DataType.FLOAT)
+                weightTFTensors(i) = tensor
+              }
+              i += 1
+            }
+          } else {
+            var i = 0
+            while (i < variableNames.length) {
+              if (weightTFTensors(i) != null) {
+                weightTFTensors(i).close()
+              }
+              val tensor = tensorManager.bigdl2Tf(weights(i), DataType.FLOAT)
               weightTFTensors(i) = tensor
+              i += 1
             }
-            i += 1
           }
-        } else {
-          var i = 0
-          while (i < variableNames.length) {
-            if (weightTFTensors(i) != null) {
-              weightTFTensors(i).close()
-            }
-            val tensor = bigdl2Tf(weights(i), DataType.FLOAT)
-            weightTFTensors(i) = tensor
-            i += 1
+          variableNames.zip(weightTFTensors).map { case (name, tensor) =>
+            runner.feed(name, tensor)
+            tensor
           }
         }
-        variableNames.zip(weightTFTensors).map { case (name, tensor) =>
-          runner.feed(name, tensor)
-          tensor
+
+        // fetch outputs
+        floatOutputNames.foreach(runner.fetch)
+
+        // fetch temp tensors used by backward if possible
+        if (this.isTraining()) {
+          graphMeta.tempTensors.map(_.map(runner.fetch))
         }
-      }
 
-      // fetch outputs
-      floatOutputNames.foreach(runner.fetch)
+        val outputs = runner.run()
 
-      // fetch temp tensors used by backward if possible
-      if (this.isTraining()) {
-        graphMeta.tempTensors.map(_.map(runner.fetch))
-      }
-
-      val outputs = runner.run()
-
-      outputs.asScala.zipWithIndex.foreach { case (t, idx) =>
-        if (idx < outputNames.length) {
-          // model outputs
-          tf2bigdl(t.asInstanceOf[TTensor[Float]], getOutput(idx + 1))
+        outputs.asScala.zipWithIndex.foreach { case (t, idx) =>
+          if (idx < outputNames.length) {
+            // model outputs
+            TFUtils.tf2bigdl(t.asInstanceOf[TTensor[Float]], getOutput(idx + 1))
+          } else {
+            // temp tensors used by backward if any
+            tempTFTensors(idx - outputNames.length) = t
+          }
+        }
+        if (!this.isTraining()) {
+          // clean up all tensorflow tensors
+          tensorManager.destructTFTensors()
+          // outputs is returned by tensorflow and cannot be freed using tensorManager
+          emptyTFTensorArray(outputs.asScala.slice(0, outputNames.length))
         } else {
-          // temp tensors used by backward if any
-          tempTFTensors(idx - outputNames.length) = t
+          // clean up variable tensorflow tensors
+          emptyTFTensorArray(weightTFTensors)
+          // clean up model output tensorflow tensors
+          emptyTFTensorArray(outputs.asScala.slice(0, outputNames.length))
+
+          // tempTensors will be cleaned up after backward
         }
       }
-      if (!this.isTraining()) {
-        // clean up all tensorflow tensors
-        tensorManager.destructTFTensors()
-        // outputs is returned by tensorflow and cannot be freed using tensorManager
-        emptyTFTensorArray(outputs.asScala.slice(0, outputNames.length))
-      } else {
-        // clean up variable tensorflow tensors
-        emptyTFTensorArray(weightTFTensors)
-        // clean up model output tensorflow tensors
-        emptyTFTensorArray(outputs.asScala.slice(0, outputNames.length))
-
-        // tempTensors will be cleaned up after backward
-      }
-
-      val end = System.nanoTime()
-      TFNet.logger.debug(s"TFNet forward time ${(end - start)/1e9} " )
-
     } catch {
       case ex: Throwable =>
         tensorManager.destructTFTensors()
@@ -331,7 +278,7 @@ class TFNet(private val graphDef: TFGraphHolder,
   override def updateGradInput(input: Activity, gradOutput: Activity): Activity = {
     try {
       if (graphMeta.variables.isEmpty) {
-        generateZeroGrad(input)
+        NetUtils.generateZeroGrad(input, gradInput)
       } else {
 
         val runner = sess.runner()
@@ -342,7 +289,7 @@ class TFNet(private val graphDef: TFGraphHolder,
 
         val gradOutputTFTensors = new Array[TTensor[_]](outputNames.length)
 
-        activity2TFTensors(gradOutput, outputTypes, gradOutputTFTensors)
+        tensorManager.tensor2TFTensors(activity2Seq(gradOutput), outputTypes, gradOutputTFTensors)
 
         // feed inputs
         inputNames.zipWithIndex.foreach { case (name, idx) =>
@@ -356,7 +303,7 @@ class TFNet(private val graphDef: TFGraphHolder,
 
         // feed temp tensors fetched during forward
         val tempTensorNames = graphMeta.tempTensors.get
-        tempTensorNames.zipWithIndex.foreach{ case (name, idx) =>
+        tempTensorNames.zipWithIndex.foreach { case (name, idx) =>
           runner.feed(name, tempTFTensors(idx))
         }
 
@@ -375,7 +322,7 @@ class TFNet(private val graphDef: TFGraphHolder,
           .zipWithIndex.foreach(x => gradWeightTFTensors(x._2) = x._1)
 
         i.zipWithIndex.foreach { case (t, idx) =>
-          tf2bigdl(t.asInstanceOf[TTensor[Float]], getGradInput(idx + 1))
+          TFUtils.tf2bigdl(t.asInstanceOf[TTensor[Float]], getGradInput(idx + 1))
         }
 
         // clean up two feeds
@@ -403,7 +350,7 @@ class TFNet(private val graphDef: TFGraphHolder,
       this.gradWeights.zipWithIndex.map { case (gradWeight, idx) =>
         val gradWeightBuffer = this.gradWeightsBuffer(idx)
         val tfTensor = gradWeightTFTensors(idx)
-        tf2bigdl(tfTensor, gradWeightBuffer)
+        TFUtils.tf2bigdl(tfTensor, gradWeightBuffer)
         if (gradWeight.isEmpty) {
           gradWeight.resizeAs(weights(idx))
         }
@@ -423,7 +370,7 @@ class TFNet(private val graphDef: TFGraphHolder,
     variables.foreach(runner.fetch)
     runner.run().asScala.zipWithIndex.map { case (fetch, idx) =>
       val t = weights(idx)
-      tf2bigdl(fetch.asInstanceOf[TTensor[Float]], t)
+      TFUtils.tf2bigdl(fetch.asInstanceOf[TTensor[Float]], t)
       t
     }
     weights
@@ -480,105 +427,16 @@ class TFNet(private val graphDef: TFGraphHolder,
     output.dataType()
   }
 
-  private def getShape(names: Seq[String]) = {
-    val shapes = names.map { name =>
-      val Array(op, idx) = name.split(":")
-      val shape = graph.operation(op).output(idx.toInt).shape()
-      Shape((0 until shape.numDimensions()).map(shape.size(_).toInt).toArray)
-    }
-
-    if (shapes.length == 1) {
-      shapes.head
-    } else {
-      MultiShape(shapes.toList)
-    }
-  }
-
-  private def bigdl2Tf(t: Tensor[Float], dataType: DataType): TTensor[_] = {
-
-    require(t.isContiguous(), "input to tfnet must be contiguous")
-    val shape = t.size().map(_.toLong)
-    val arr = t.storage().array()
-    val offset: Int = t.storageOffset() - 1
-    val length: Int = shape.product.toInt
-
-    if (dataType == DataType.FLOAT) {
-      val buffer = FloatBuffer.wrap(arr, offset, length)
-      tensorManager.createTFTensor(shape, buffer)
-    } else if (dataType == DataType.UINT8) {
-      val buffer = ByteBuffer.wrap(TFNet.floatToUint8(arr), offset, length)
-      tensorManager.createTFTensor(shape, buffer)
-    } else if (dataType == DataType.INT32) {
-      val buffer = IntBuffer.wrap(TFNet.floatToInt(arr), offset, length)
-      tensorManager.createTFTensor(shape, buffer)
-    } else if (dataType == DataType.INT64) {
-      val buffer = LongBuffer.wrap(TFNet.floatToLong(arr), offset, length)
-      tensorManager.createTFTensor(shape, buffer)
-    } else if (dataType == DataType.DOUBLE) {
-      val buffer = DoubleBuffer.wrap(TFNet.floatToDouble(arr), offset, length)
-      tensorManager.createTFTensor(shape, buffer)
-    } else if (dataType == DataType.BOOL) {
-      val buffer = ByteBuffer.wrap(TFNet.floatToBool(arr), offset, length)
-      tensorManager.createBoolTFTensor(shape, buffer)
-    } else {
-      throw new Exception(s"data type ${dataType} are not supported")
-    }
-
-
-  }
-
-  private def tf2bigdl(t: TTensor[_], output: Tensor[Float]) = {
-    val shape = t.shape().map(_.toInt)
-    output.resize(shape)
-    val buffer = FloatBuffer.wrap(
-      output.storage().array(),
-      output.storageOffset() - 1,
-      shape.product)
-    t.writeTo(buffer)
-  }
-
   private def activityLength(a: Activity): Int = {
     if (a.isTensor) 1 else a.toTable.length()
   }
 
-
-  private def activity2TFTensors(input: Activity, types: Seq[DataType],
-                                 tfTensors: Array[TTensor[_]]) = {
-    if (input.isTensor) {
-      require(tfTensors.length == 1, "activity and tfTensors size does not equal," +
-        s" activity length is 1 tfTensors length is ${tfTensors.length}")
-      val tfTensor = bigdl2Tf(input.toTensor[Float], types.head)
-      if (tfTensors(0) != null) {
-        tfTensors(0).close()
-      }
-      tfTensors(0) = tfTensor
+  private def activity2Seq(a: Activity): Seq[Tensor[_]] = {
+    if (a.isTensor) {
+      Seq(a.asInstanceOf[Tensor[_]])
     } else {
-      val t = input.toTable
-      require(tfTensors.length == t.length(), "activity and tfTensors size does not equal," +
-        s" activity length is ${t.length()} tfTensors length is ${tfTensors.length}")
-      var i = 1
-      while (i <= t.length()) {
-        val tfTensor = bigdl2Tf(t[Tensor[Float]](i), types(i-1))
-        if (tfTensors(i -1) != null) {
-          tfTensors(i - 1).close()
-        }
-        tfTensors(i - 1) = tfTensor
-        i += 1
-      }
-    }
-  }
-
-  private def generateZeroGrad(input: Activity) = {
-    if (gradInput.isTable) {
-      var i = 0
-      while (i < gradInput.toTable.length()) {
-        gradInput.toTable[Tensor[Float]](i + 1)
-          .resizeAs(input.toTable[Tensor[Float]](i + 1))
-        i = i + 1
-      }
-    } else {
-      gradInput.toTensor[Float]
-        .resizeAs(input.toTensor[Float])
+      val t = a.toTable
+      t.toSeq[Tensor[_]]
     }
   }
 
@@ -594,8 +452,6 @@ object TFNet {
 
   @transient
   private lazy val inDriver = NetUtils.isDriver
-
-  val logger = LoggerFactory.getLogger(getClass)
 
   private val graphRegistry = new RegistryMap[ClosableGraph]()
 
@@ -703,65 +559,15 @@ object TFNet {
     }
   }
 
-
-  private def floatToInt(array: Array[Float]): Array[Int] = {
-    val result = new Array[Int](array.length)
-    var i = 0
-    while (i < array.length) {
-      result(i) = array(i).toInt
-      i = i + 1
-    }
-    result
-  }
-
-  private def floatToLong(array: Array[Float]): Array[Long] = {
-    val result = new Array[Long](array.length)
-    var i = 0
-    while (i < array.length) {
-      result(i) = array(i).toLong
-      i = i + 1
-    }
-    result
-  }
-
-  private def floatToDouble(array: Array[Float]): Array[Double] = {
-    val result = new Array[Double](array.length)
-    var i = 0
-    while (i < array.length) {
-      result(i) = array(i).toDouble
-      i = i + 1
-    }
-    result
-  }
-
-  private def floatToUint8(array: Array[Float]): Array[Byte] = {
-    val result = new Array[Byte](array.length)
-    var i = 0
-    while (i < array.length) {
-      result(i) = array(i).toByte
-      i = i + 1
-    }
-    result
-  }
-
-  private def floatToBool(array: Array[Float]): Array[Byte] = {
-    val result = new Array[Byte](array.length)
-    var i = 0
-    while (i < array.length) {
-      result(i) = if (array(i) == 0.0) 0.toByte else 1.toByte
-      i = i + 1
-    }
-    result
-  }
-
   /**
    * Create a TFNet
+   *
    * @param graphDef the tensorflow GraphDef object
    * @return
    */
   private[zoo] def apply(graphDef: GraphDef, graphId: String,
-                    graphMeta: Meta,
-                    config: Array[Byte]): TFNet = {
+                         graphMeta: Meta,
+                         config: Array[Byte]): TFNet = {
     val graph = new Graph()
     graph.importGraphDef(graphDef.toByteArray)
 
@@ -770,8 +576,9 @@ object TFNet {
 
   /**
    * Create a TFNet
-   * @param path the file path of a graphDef
-   * @param inputNames the input tensor names of this subgraph
+   *
+   * @param path        the file path of a graphDef
+   * @param inputNames  the input tensor names of this subgraph
    * @param outputNames the output tensor names of this subgraph
    * @return
    */
@@ -793,8 +600,9 @@ object TFNet {
 
   /**
    * Create a TFNet
-   * @param path the file path of a graphDef
-   * @param inputNames the input tensor names of this subgraph
+   *
+   * @param path        the file path of a graphDef
+   * @param inputNames  the input tensor names of this subgraph
    * @param outputNames the output tensor names of this subgraph
    * @return
    */
@@ -815,7 +623,57 @@ object TFNet {
     TFNet(graphDef, model, meta, config)
   }
 
-  private[zoo] def parseGraph(graphProtoTxt: String) : GraphDef = {
+  def fromSavedModel(modelPath: String, tag: String,
+                     inputs: Array[String],
+                     outputs: Array[String],
+                     sessionConfig: SessionConfig): AbstractModule[Activity, Activity, Float] = {
+    TFNetForInference.fromSavedModel(modelPath, Option(tag), None,
+      Option(inputs), Option(outputs), sessionConfig.toByteArray())
+  }
+
+  def fromSavedModel(modelPath: String,
+                     inputs: Array[String],
+                     outputs: Array[String],
+                     sessionConfig: SessionConfig): AbstractModule[Activity, Activity, Float] = {
+    TFNetForInference.fromSavedModel(modelPath, None, None, Option(inputs), Option(outputs),
+      sessionConfig.toByteArray())
+  }
+
+  def fromSavedModel(modelPath: String, tag: String,
+                     inputs: Array[String],
+                     outputs: Array[String]): AbstractModule[Activity, Activity, Float] = {
+    TFNetForInference.fromSavedModel(modelPath, None, None, Option(inputs), Option(outputs),
+      TFNet.defaultSessionConfig.toByteArray())
+  }
+
+  def fromSavedModel(modelPath: String,
+                     inputs: Array[String],
+                     outputs: Array[String]): AbstractModule[Activity, Activity, Float] = {
+    TFNetForInference.fromSavedModel(modelPath, None, None, Option(inputs), Option(outputs),
+      defaultSessionConfig.toByteArray())
+  }
+
+  def fromSavedModel(modelPath: String,
+                     tag: String,
+                     signature: String,
+                     sessionConfig: SessionConfig): AbstractModule[Activity, Activity, Float] = {
+    TFNetForInference.fromSavedModel(modelPath, Option(tag), Option(signature), None, None,
+      sessionConfig.toByteArray())
+  }
+
+  def fromSavedModel(modelPath: String,
+                     tag: String,
+                     signature: String): AbstractModule[Activity, Activity, Float] = {
+    TFNetForInference.fromSavedModel(modelPath, Option(tag), Option(signature), None, None,
+      defaultSessionConfig.toByteArray())
+  }
+
+  def fromSavedModel(modelPath: String): AbstractModule[Activity, Activity, Float] = {
+    TFNetForInference.fromSavedModel(modelPath, None, None, None, None,
+      defaultSessionConfig.toByteArray())
+  }
+
+  private[zoo] def parseGraph(graphProtoTxt: String): GraphDef = {
     var fr: File = null
     var in: InputStream = null
     try {

@@ -23,6 +23,11 @@ from zoo.tfpark.text.keras import *
 
 class TestTextModels(ZooTestCase):
 
+    def setup_method(self, method):
+        import tensorflow as tf
+        tf.keras.backend.clear_session()
+        super(TestTextModels, self).setup_method(method)
+
     def test_intent_entity(self):
         model = IntentEntity(num_intents=8, num_entities=5, word_length=10,
                              word_vocab_size=200, char_vocab_size=50)
@@ -44,7 +49,7 @@ class TestTextModels(ZooTestCase):
         model = NER(num_entities=15, word_length=8, word_vocab_size=20,
                     char_vocab_size=10, crf_mode="pad")
         input_data = [np.random.randint(20, size=(4, 12)), np.random.randint(10, size=(4, 12, 8)),
-                      np.random.randint(12, size=(15, 1))]
+                      np.random.randint(12, size=(4, 1))]
         output = model.predict(input_data, distributed=True)
         assert output.shape == (4, 12, 15)
         self.assert_tfpark_model_save_load(model, input_data)

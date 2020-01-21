@@ -46,19 +46,28 @@ ${SPARK_HOME}/bin/spark-submit \
 now=$(date "+%s")
 time1=$((now-start))
 
-echo "#2 start example test for customized loss and layer (Funtional API)"
+echo "#2 start example test for autograd"
 #timer
 start=$(date "+%s")
+echo "#2.1 start example test for custom layer"
 ${SPARK_HOME}/bin/spark-submit \
     --master ${MASTER} \
-    --driver-memory 20g \
-    --executor-memory 20g \
+    --driver-memory 2g \
+    --executor-memory 2g \
     --py-files ${ANALYTICS_ZOO_PYZIP},${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/autograd/custom.py \
     --jars ${ANALYTICS_ZOO_JAR} \
     --conf spark.driver.extraClassPath=${ANALYTICS_ZOO_JAR} \
     --conf spark.executor.extraClassPath=${ANALYTICS_ZOO_JAR} \
     ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/autograd/custom.py \
     --nb_epoch 2
+
+echo "#2.2 start example test for customloss"
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+    --master ${MASTER} \
+    --driver-memory 2g \
+    --executor-memory 2g \
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/autograd/customloss.py
+
 now=$(date "+%s")
 time2=$((now-start))
 
@@ -141,6 +150,11 @@ else
    mkdir -p analytics-zoo-data/data/dogs-vs-cats/samples
    cp analytics-zoo-data/data/dogs-vs-cats/train/cat.71* analytics-zoo-data/data/dogs-vs-cats/samples
    cp analytics-zoo-data/data/dogs-vs-cats/train/dog.71* analytics-zoo-data/data/dogs-vs-cats/samples
+
+   mkdir -p analytics-zoo-data/data/dogs-vs-cats/demo/cats
+   mkdir -p analytics-zoo-data/data/dogs-vs-cats/demo/dogs
+   cp analytics-zoo-data/data/dogs-vs-cats/train/cat.71* analytics-zoo-data/data/dogs-vs-cats/demo/cats
+   cp analytics-zoo-data/data/dogs-vs-cats/train/dog.71* analytics-zoo-data/data/dogs-vs-cats/demo/dogs
    # echo "Finished downloading images"
 fi
 # total batch size: 32 should be divided by total core number: 28
@@ -186,6 +200,14 @@ ${SPARK_HOME}/bin/spark-submit \
    --conf spark.executor.extraClassPath=${ANALYTICS_ZOO_JAR} \
    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/nnframes/imageTransferLearning/tmp.py\
    analytics-zoo-models/bigdl_inception-v1_imagenet_0.4.0.model analytics-zoo-data/data/dogs-vs-cats/samples
+
+
+echo "start example test for nnframes tensorflow SimpleTraining"
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+   --master local[1] \
+   --driver-memory 5g \
+   ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/nnframes/tensorflow/SimpleTraining.py
+
 now=$(date "+%s")
 time5=$((now-start))
 
@@ -214,7 +236,7 @@ ${SPARK_HOME}/bin/spark-submit \
     --image hdfs://172.168.2.181:9000/kaggle/train_100 \
     --model analytics-zoo-models/ssd_mobilenet_v1_coco_2017_11_17/frozen_inference_graph.pb
 
-echo "start example test for tensorflow distributed_training"
+echo "start example test for tfpark"
 if [ ! -d analytics-zoo-tensorflow-models ]
 then
     mkdir analytics-zoo-tensorflow-models
@@ -237,17 +259,17 @@ else
    export PYTHONPATH=`pwd`/analytics-zoo-tensorflow-models/slim:$PYTHONPATH
  fi
 
-echo "start example test for tensorflow distributed_training train_lenet 1"
+echo "start example test for TFPark tf_optimizer train_lenet 1"
 ${SPARK_HOME}/bin/spark-submit \
     --master ${MASTER} \
     --driver-memory 200g \
     --executor-memory 200g \
     --properties-file ${ANALYTICS_ZOO_CONF} \
-    --py-files ${ANALYTICS_ZOO_PYZIP},${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/distributed_training/train_lenet.py \
+    --py-files ${ANALYTICS_ZOO_PYZIP},${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/tf_optimizer/train_lenet.py \
     --jars ${ANALYTICS_ZOO_JAR} \
     --conf spark.driver.extraClassPath=${ANALYTICS_ZOO_JAR} \
     --conf spark.executor.extraClassPath=${ANALYTICS_ZOO_JAR} \
-    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/distributed_training/train_lenet.py 1 1000\
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/tf_optimizer/train_lenet.py 1 1000
 
 sed "s%/tmp%analytics-zoo-tensorflow-models%g;s%models/slim%slim%g"
 if [ -d analytics-zoo-tensorflow-models/slim ]
@@ -263,46 +285,77 @@ else
    export PYTHONPATH=`pwd`/analytics-zoo-tensorflow-models/slim:$PYTHONPATH
 fi
 
-echo "start example test for tensorflow distributed_training evaluate_lenet 2"
+echo "start example test for TFPark tf_optimizer evaluate_lenet 2"
 ${SPARK_HOME}/bin/spark-submit \
     --master ${MASTER} \
     --driver-memory 200g \
     --executor-memory 200g \
     --properties-file ${ANALYTICS_ZOO_CONF} \
-    --py-files ${ANALYTICS_ZOO_PYZIP},${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/distributed_training/evaluate_lenet.py \
+    --py-files ${ANALYTICS_ZOO_PYZIP},${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/tf_optimizer/evaluate_lenet.py \
     --jars ${ANALYTICS_ZOO_JAR} \
     --conf spark.driver.extraClassPath=${ANALYTICS_ZOO_JAR} \
     --conf spark.executor.extraClassPath=${ANALYTICS_ZOO_JAR} \
-    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/distributed_training/evaluate_lenet.py 1000\
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/tf_optimizer/evaluate_lenet.py 1000
 
-echo "start example test for tensorflow distributed_training train_mnist_keras 3"
+echo "start example test for TFPark tf_optimizer train_mnist_keras 3"
 ${SPARK_HOME}/bin/spark-submit \
     --master ${MASTER} \
     --driver-memory 200g \
     --executor-memory 200g \
     --properties-file ${ANALYTICS_ZOO_CONF} \
-    --py-files ${ANALYTICS_ZOO_PYZIP},${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/distributed_training/train_mnist_keras.py \
+    --py-files ${ANALYTICS_ZOO_PYZIP},${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/tf_optimizer/train_mnist_keras.py \
     --jars ${ANALYTICS_ZOO_JAR} \
     --conf spark.driver.extraClassPath=${ANALYTICS_ZOO_JAR} \
     --conf spark.executor.extraClassPath=${ANALYTICS_ZOO_JAR} \
-    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/distributed_training/train_mnist_keras.py 1 1000\
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/tf_optimizer/train_mnist_keras.py 1 1000
 
-echo "start example test for tensorflow distributed_training evaluate_lenet 4"
+echo "start example test for TFPark tf_optimizer evaluate_lenet 4"
 ${SPARK_HOME}/bin/spark-submit \
     --master ${MASTER} \
     --driver-memory 200g \
     --executor-memory 200g \
     --properties-file ${ANALYTICS_ZOO_CONF} \
-    --py-files ${ANALYTICS_ZOO_PYZIP},${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/distributed_training/evaluate_mnist_keras.py \
+    --py-files ${ANALYTICS_ZOO_PYZIP},${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/tf_optimizer/evaluate_mnist_keras.py \
     --jars ${ANALYTICS_ZOO_JAR} \
     --conf spark.driver.extraClassPath=${ANALYTICS_ZOO_JAR} \
     --conf spark.executor.extraClassPath=${ANALYTICS_ZOO_JAR} \
-    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/distributed_training/evaluate_mnist_keras.py 1000\
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/tf_optimizer/evaluate_mnist_keras.py 1000
+
+echo "start example test for TFPark keras keras_dataset 5"
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+    --master ${MASTER} \
+    --driver-memory 2g \
+    --executor-memory 2g \
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/keras/keras_dataset.py 1
+
+
+echo "start example test for TFPark keras keras_ndarray 6"
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+    --master ${MASTER} \
+    --driver-memory 2g \
+    --executor-memory 2g \
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/keras/keras_ndarray.py 1
+
+
+echo "start example test for TFPark estimator estimator_dataset 7"
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+    --master ${MASTER} \
+    --driver-memory 2g \
+    --executor-memory 2g \
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/estimator/estimator_dataset.py
+
+
+echo "start example test for TFPark estimator estimator_inception 8"
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+    --master ${MASTER} \
+    --driver-memory 20g \
+    --executor-memory 20g \
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/tensorflow/tfpark/estimator/estimator_inception.py \
+        --image-path analytics-zoo-data/data/dogs-vs-cats/demo --num-classes 2
 
     
 now=$(date "+%s")
 time6=$((now-start))
-echo "#6 tensorflow time used:$time6 seconds"
 
 echo "#7 start example test for anomalydetection"
 if [ -f analytics-zoo-data/data/NAB/nyc_taxi/nyc_taxi.csv ]
@@ -327,7 +380,6 @@ ${SPARK_HOME}/bin/spark-submit \
     --input_dir analytics-zoo-data/data/NAB/nyc_taxi/nyc_taxi.csv
 now=$(date "+%s")
 time7=$((now-start))
-echo "#7 anomalydetection time used:$time7 seconds"
 
 echo "#8 start example test for qaranker"
 #timer
@@ -363,11 +415,188 @@ ${SPARK_HOME}/bin/spark-submit \
 
 now=$(date "+%s")
 time8=$((now-start))
-echo "#1 textclassification time used:$time1 seconds"
-echo "#2 customized loss and layer time used:$time2 seconds"
-echo "#3 image-classification time used:$time3 seconds"
-echo "#4 object-detection loss and layer time used:$time4 seconds"
-echo "#5 nnframes time used:$time5 seconds"
-echo "#6 tensorflow time used:$time6 seconds"
-echo "#7 anomalydetection time used:$time7 seconds"
-echo "#8 qaranker time used:$time8 seconds"
+
+echo "#9 start example test for inceptionv1 training"
+#timer
+start=$(date "+%s")
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+   --master local[4] \
+   --driver-memory 10g \
+   ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/inception/inception.py \
+   --maxIteration 20 \
+   -b 8 \
+   -f hdfs://172.168.2.181:9000/imagenet-mini
+now=$(date "+%s")
+time9=$((now-start))
+
+echo "#10 start example test for pytorch"
+#timer
+start=$(date "+%s")
+echo "start example test for pytorch SimpleTrainingExample"
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+   --master local[1] \
+   --driver-memory 5g \
+   ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/pytorch/train/SimpleTrainingExample.py
+
+echo "start example test for pytorch mnist training"
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+   --master local[1] \
+   --driver-memory 5g \
+   ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/pytorch/train/Lenet_mnist.py
+now=$(date "+%s")
+time10=$((now-start))
+
+echo "#11 start example test for openvino"
+#timer
+start=$(date "+%s")
+if [ -f analytics-zoo-models/faster_rcnn_resnet101_coco_2018_01_28.tar.gz ]
+then
+   echo "analytics-zoo-models/faster_rcnn_resnet101_coco already exists."
+else
+   wget $FTP_URI/analytics-zoo-models/openvino/faster_rcnn_resnet101_coco_2018_01_28.tar.gz \
+    -P analytics-zoo-models
+   tar zxf analytics-zoo-models/faster_rcnn_resnet101_coco_2018_01_28.tar.gz -C analytics-zoo-models/
+fi
+if [ -d analytics-zoo-data/data/object-detection-coco ]
+then
+    echo "analytics-zoo-data/data/object-detection-coco already exists"
+else
+    wget $FTP_URI/analytics-zoo-data/data/object-detection-coco.zip -P analytics-zoo-data/data
+    unzip -q analytics-zoo-data/data/object-detection-coco.zip -d analytics-zoo-data/data
+fi
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+    --master ${MASTER} \
+    --driver-memory 10g \
+    --executor-memory 10g \
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/openvino/predict.py \
+    --image analytics-zoo-data/data/object-detection-coco \
+    --model analytics-zoo-models/faster_rcnn_resnet101_coco_2018_01_28
+now=$(date "+%s")
+time11=$((now-start))
+
+echo "#12 start example for vnni/openvino"
+#timer
+start=$(date "+%s")
+if [ -d analytics-zoo-models/vnni ]
+then
+   echo "analytics-zoo-models/resnet_v1_50.xml already exists."
+else
+   wget $FTP_URI/analytics-zoo-models/openvino/vnni/resnet_v1_50.zip \
+    -P analytics-zoo-models
+    unzip -q analytics-zoo-models/resnet_v1_50.zip -d analytics-zoo-models/vnni
+fi
+if [ -d analytics-zoo-data/data/object-detection-coco ]
+then
+    echo "analytics-zoo-data/data/object-detection-coco already exists"
+else
+    wget $FTP_URI/analytics-zoo-data/data/object-detection-coco.zip -P analytics-zoo-data/data
+    unzip -q analytics-zoo-data/data/object-detection-coco.zip -d analytics-zoo-data/data
+fi
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+    --master ${MASTER} \
+    --driver-memory 2g \
+    --executor-memory 2g \
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/vnni/openvino/predict.py \
+    --model analytics-zoo-models/vnni/resnet_v1_50.xml \
+    --image analytics-zoo-data/data/object-detection-coco
+now=$(date "+%s")
+time12=$((now-start))
+
+echo "#13 start example test for streaming Object Detection"
+#timer
+start=$(date "+%s")
+if [ -d analytics-zoo-data/data/object-detection-coco ]
+then
+    echo "analytics-zoo-data/data/object-detection-coco already exists"
+else
+    wget $FTP_URI/analytics-zoo-data/data/object-detection-coco.zip -P analytics-zoo-data/data
+    unzip -q analytics-zoo-data/data/object-detection-coco.zip -d analytics-zoo-data/data/
+fi
+
+if [ -f analytics-zoo-models/analytics-zoo_ssd-vgg16-300x300_COCO_0.1.0.model ]
+then
+    echo "analytics-zoo-models/object-detection/analytics-zoo_ssd-vgg16-300x300_COCO_0.1.0.model already exists"
+else
+    wget $FTP_URI/analytics-zoo-models/object-detection/analytics-zoo_ssd-vgg16-300x300_COCO_0.1.0.model \
+     -P analytics-zoo-models
+fi
+
+mkdir output
+mkdir stream
+while true
+do
+   temp1=$(find analytics-zoo-data/data/object-detection-coco -type f|wc -l)
+   temp2=$(find ./output -type f|wc -l)
+   temp3=$(($temp1+$temp1))
+   if [ $temp3 -eq $temp2 ];then
+       kill -9 $(ps -ef | grep streaming_object_detection | grep -v grep |awk '{print $2}')
+       rm -r output
+       rm -r stream
+   break
+   fi
+done  &
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+    --master ${MASTER} \
+    --driver-memory 2g \
+    --executor-memory 2g \
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/streaming/objectdetection/streaming_object_detection.py \
+    --streaming_path ./stream \
+    --model analytics-zoo-models/analytics-zoo_ssd-vgg16-300x300_COCO_0.1.0.model \
+    --output_path ./output  &
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+    --master ${MASTER} \
+    --driver-memory 2g \
+    --executor-memory 2g \
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/streaming/objectdetection/image_path_writer.py \
+    --streaming_path ./stream \
+    --img_path analytics-zoo-data/data/object-detection-coco
+
+now=$(date "+%s")
+time13=$((now-start))
+
+echo "#14 start example test for streaming Text Classification"
+if [ -d analytics-zoo-data/data/streaming/text-model ]
+then
+    echo "analytics-zoo-data/data/streaming/text-model already exists"
+else
+    wget $FTP_URI/analytics-zoo-data/data/streaming/text-model.zip -P analytics-zoo-data/data/streaming/
+    unzip -q analytics-zoo-data/data/streaming/text-model.zip -d analytics-zoo-data/data/streaming/
+fi
+#timer
+start=$(date "+%s")
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
+    --master ${MASTER} \
+    --driver-memory 2g \
+    --executor-memory 5g \
+    ${ANALYTICS_ZOO_ROOT}/pyzoo/zoo/examples/streaming/textclassification/streaming_text_classification.py \
+    --model analytics-zoo-data/data/streaming/text-model/text_classifier.model \
+    --index_path analytics-zoo-data/data/streaming/text-model/word_index.txt \
+    --input_file analytics-zoo-data/data/streaming/text-model/textfile/ > 1.log &
+while :
+do
+echo "I am strong and I am smart" >> analytics-zoo-data/data/streaming/text-model/textfile/s
+if [ -n "$(grep "top-5" 1.log)" ];then
+    echo "----Find-----"
+    kill -9 $(ps -ef | grep streaming_text_classification | grep -v grep |awk '{print $2}')
+    rm 1.log
+    sleep 1s
+    break
+fi
+done
+now=$(date "+%s")
+time14=$((now-start))
+
+echo "#1 textclassification time used: $time1 seconds"
+echo "#2 autograd time used: $time2 seconds"
+echo "#3 image-classification time used: $time3 seconds"
+echo "#4 object-detection loss and layer time used: $time4 seconds"
+echo "#5 nnframes time used: $time5 seconds"
+echo "#6 tensorflow time used: $time6 seconds"
+echo "#7 anomalydetection time used: $time7 seconds"
+echo "#8 qaranker time used: $time8 seconds"
+echo "#9 inceptionV1 training time used: $time9 seconds"
+echo "#10 pytorch time used: $time10 seconds"
+echo "#11 openvino time used: $time11 seconds"
+echo "#12 vnni/openvino time used: $time12 seconds"
+echo "#13 streaming Object Detection time used: $time13 seconds"
+echo "#14 streaming text classification time used: $time14 seconds"

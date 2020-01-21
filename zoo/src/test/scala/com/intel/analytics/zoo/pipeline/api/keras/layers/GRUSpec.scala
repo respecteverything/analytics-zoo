@@ -22,7 +22,6 @@ import com.intel.analytics.bigdl.utils.Shape
 import com.intel.analytics.zoo.pipeline.api.keras.models.Sequential
 import com.intel.analytics.zoo.pipeline.api.keras.serializer.ModuleSerializationTest
 
-import scala.util.Random
 
 class GRUSpec extends KerasBaseSpec {
 
@@ -57,22 +56,24 @@ class GRUSpec extends KerasBaseSpec {
       kerasCode, weightConverter)
   }
 
-  "GRU return sequences" should "be the same as Keras" in {
-    val kerasCode =
-      """
-        |input_tensor = Input(shape=[32, 32])
-        |input = np.random.random([2, 32, 32])
-        |output_tensor = GRU(36, return_sequences=True, activation="relu")(input_tensor)
-        |model = Model(input=input_tensor, output=output_tensor)
-      """.stripMargin
-    val seq = Sequential[Float]()
-    val layer = GRU[Float](36, returnSequences = true,
-      activation = "relu", inputShape = Shape(32, 32))
-    seq.add(layer)
-    seq.getOutputShape().toSingle().toArray should be (Array(-1, 32, 36))
-    checkOutputAndGrad(seq.asInstanceOf[AbstractModule[Tensor[Float], Tensor[Float], Float]],
-      kerasCode, weightConverter)
-  }
+//  Comment out this test due to conflict of Keras and TensorFlow
+//  todo resolve version conflict
+//  "GRU return sequences" should "be the same as Keras" in {
+//    val kerasCode =
+//      """
+//        |input_tensor = Input(shape=[32, 32])
+//        |input = np.random.random([2, 32, 32])
+//        |output_tensor = GRU(36, return_sequences=True, activation="relu")(input_tensor)
+//        |model = Model(input=input_tensor, output=output_tensor)
+//      """.stripMargin
+//    val seq = Sequential[Float]()
+//    val layer = GRU[Float](36, returnSequences = true,
+//      activation = "relu", inputShape = Shape(32, 32))
+//    seq.add(layer)
+//    seq.getOutputShape().toSingle().toArray should be (Array(-1, 32, 36))
+//    checkOutputAndGrad(seq.asInstanceOf[AbstractModule[Tensor[Float], Tensor[Float], Float]],
+//      kerasCode, weightConverter)
+//  }
 
   "GRU go backwards and return sequences" should "be the same as Keras" in {
     val kerasCode =
@@ -98,7 +99,7 @@ class GRUSerialTest extends ModuleSerializationTest {
     val layer = GRU[Float](16, returnSequences = true,
       goBackwards = true, inputShape = Shape(28, 32))
     layer.build(Shape(2, 28, 32))
-    val input = Tensor[Float](2, 28, 32).apply1(_ => Random.nextFloat())
+    val input = Tensor[Float](2, 28, 32).rand()
     runSerializationTest(layer, input)
   }
 }

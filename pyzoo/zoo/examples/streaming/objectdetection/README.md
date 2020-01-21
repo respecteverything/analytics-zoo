@@ -4,8 +4,8 @@ Imagining we have pre-trained model and image files in file system, and we want 
 So, there are two applications in this example: image_path_writer and streaming_object_detection. image_path_writer will package image paths into text files. Meanwhile, streaming_object_detection read image path from those text files, then read image content and make prediction.
 
 ## Environment
-* Python (2.7, 3.5 or 3.6)
-* Apache Spark 1.6.0/2.1.0 (This version needs to be same with the version you use to build Analytics Zoo)
+* Python 3.5/3.6
+* Apache Spark 2.x (This version needs to be same with the version you use to build Analytics Zoo)
 * Analytics Zoo ([install analytics-zoo]((https://analytics-zoo.github.io/master/#PythonUserGuide/install/) ) via __pip__ or __download the prebuilt package__.)
 
 ## Datasets and pre-trained models
@@ -15,13 +15,15 @@ So, there are two applications in this example: image_path_writer and streaming_
 ## Run this example
 Make sure all nodes can access image files, model and text files. Local file system/HDFS/Amazon S3 are supported.
 
+Pls ensure all paths exist and accessible, and `streaming_path` is empty. Note that `streaming_object_detection` and `image_path_writer` should use the same `streaming_path`.
+
 1. Start streaming_object_detection
 ```
 MASTER=...
 model=... // model path. Local file system/HDFS/Amazon S3 are supported
 streaming_path=... // text files location. Only local file system is supported
 output_path=... // output path of prediction result. Only local file system is supported
-${ANALYTICS_ZOO_HOME}/bin/spark-submit-with-zoo.sh \
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
     --master ${MASTER} \
     --driver-memory 5g \
     --executor-memory 5g \
@@ -34,7 +36,7 @@ ${ANALYTICS_ZOO_HOME}/bin/spark-submit-with-zoo.sh \
 MASTER=...
 img_path=... // image path. Only local file system is supported
 streaming_path=... // text files. Only local file system is supported
-${ANALYTICS_ZOO_HOME}/bin/spark-submit-with-zoo.sh \
+${ANALYTICS_ZOO_HOME}/bin/spark-submit-python-with-zoo.sh \
     --master ${MASTER} \
     --driver-memory 5g \
     image_path_writer.py \

@@ -50,5 +50,6 @@ class TestUtil(TestCase):
             for pid in process_info.pids:
                 assert not psutil.pid_exists(pid)
 
+
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -15,8 +15,6 @@
  */
 package com.intel.analytics.zoo.pipeline.api.net
 
-import java.util.concurrent.{ConcurrentHashMap, ConcurrentMap}
-
 import com.esotericsoftware.kryo.{Kryo, KryoSerializable}
 import com.esotericsoftware.kryo.io.{Input, Output}
 import com.intel.analytics.bigdl.Module
@@ -35,8 +33,10 @@ import org.apache.spark.utils.SparkUtils
 import org.json4s._
 import org.json4s.jackson.JsonMethods._
 import org.slf4j.{Logger, LoggerFactory}
+import org.tensorflow.DataType
 
 import scala.collection.JavaConverters._
+import scala.collection.immutable.VectorBuilder
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source
@@ -154,11 +154,11 @@ object NetUtils {
   }
 
   private[zoo] def dynamic[T](
-       input : Array[ModuleNode[T]],
-       output : Array[ModuleNode[T]],
-       variables: Option[(Array[Tensor[T]], Array[Tensor[T]])] = None,
-       generateBackward: Boolean = true)
-       (implicit ev: TensorNumeric[T], ev2: ClassTag[T]): Graph[T] = {
+                               input: Array[ModuleNode[T]],
+                               output: Array[ModuleNode[T]],
+                               variables: Option[(Array[Tensor[T]], Array[Tensor[T]])] = None,
+                               generateBackward: Boolean = true)
+                             (implicit ev: TensorNumeric[T], ev2: ClassTag[T]): Graph[T] = {
     import scala.reflect.runtime.{universe => ru}
     val m = ru.runtimeMirror(Graph.getClass.getClassLoader)
     val mirror = m.reflect(Graph)
@@ -207,6 +207,20 @@ object NetUtils {
     case e: NullPointerException =>
       true
   }
+
+  def generateZeroGrad(input: Activity, grad: Activity): Unit = {
+    if (grad.isTable) {
+      var i = 0
+      while (i < grad.toTable.length()) {
+        grad.toTable[Tensor[Float]](i + 1)
+          .resizeAs(input.toTable[Tensor[Float]](i + 1))
+        i = i + 1
+      }
+    } else {
+      grad.toTensor[Float]
+        .resizeAs(input.toTensor[Float])
+    }
+  }
 }
 
 private[zoo] case class Meta(inputNames: Array[String],
@@ -215,7 +229,19 @@ private[zoo] case class Meta(inputNames: Array[String],
                              variables: Option[Array[String]] = None,
                              gradVariables: Option[Array[String]] = None,
                              gradInputs: Option[Array[String]] = None
-                             )
+                             ) {
+
+  for (name <- inputNames) {
+    require(name.split(":").length == 2, s"Input names require to be Tensor names, " +
+      s"but <${name}> looks like a operation name, please try <${name}:0> instead.")
+  }
+
+  for (name <- outputNames) {
+    require(name.split(":").length == 2, s"Output names require to be Tensor names, " +
+      s"but <${name}> looks like a operation name, please try <${name}:0> instead.")
+  }
+
+}
 
 
 trait NetUtils[T, D <: Module[T] with NetUtils[T, D]] {

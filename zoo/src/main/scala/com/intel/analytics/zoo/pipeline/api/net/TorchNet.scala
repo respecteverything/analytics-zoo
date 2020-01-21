@@ -19,6 +19,7 @@ package com.intel.analytics.zoo.pipeline.api.net
 import java.io._
 import java.nio.channels.Channels
 import java.nio.file.{Files, Paths}
+import java.util.UUID
 
 import com.intel.analytics.bigdl.Module
 import com.intel.analytics.bigdl.nn.abstractnn.{AbstractModule, Activity}
@@ -58,7 +59,7 @@ class TorchNet private(private val modelHolder: TorchModelHolder)
     if (weights == null) {
       val w = PytorchModel.getWeightNative(ref).clone()
       weights = Tensor(w, Array(w.length))
-    } else {
+    } else if (!weights.isEmpty) {
       PytorchModel.updateWeightNative(ref, weights.storage().array())
     }
 
@@ -66,6 +67,15 @@ class TorchNet private(private val modelHolder: TorchModelHolder)
       gradients = Tensor()
     }
     ref
+  }
+
+  override def evaluate(): this.type = {
+    nativeRef
+    super.evaluate()
+    if (!weights.isEmpty) {
+      PytorchModel.updateWeightNative(nativeRef, weights.storage().array())
+    }
+    this
   }
 
   override def parameters(): (Array[Tensor[Float]], Array[Tensor[Float]]) = {
@@ -82,7 +92,8 @@ class TorchNet private(private val modelHolder: TorchModelHolder)
       PytorchModel.updateWeightNative(this.nativeRef, weights.storage().array())
     }
 
-    val result = PytorchModel.modelForwardNative(nativeRef, this.isTraining(), sto1, off1, shape1)
+    val result = PytorchModelWrapper.modelForwardNative(nativeRef,
+      this.isTraining(), sto1, off1, shape1)
     if (result.length == 1) {
       val resultTensor = Tensor(result(0).getData, result(0).getShape)
       if (output == null) {
@@ -106,7 +117,7 @@ class TorchNet private(private val modelHolder: TorchModelHolder)
 
     val (sto1, off1, shape1) = TorchCriterion.extract(gradOutputTable)
 
-    val result = PytorchModel.modelBackwardNative(nativeRef, sto1, off1, shape1)
+    val result = PytorchModelWrapper.modelBackwardNative(nativeRef, sto1, off1, shape1)
     // update gradients
     gradients.resizeAs(weights)
     val g = PytorchModel.getGradientNative(this.nativeRef)
@@ -136,18 +147,21 @@ class TorchNet private(private val modelHolder: TorchModelHolder)
     super.finalize()
     PytorchModel.releaseModelNative(nativeRef)
   }
+
+  /**
+   * export the model to path as a torch script module.
+   */
+  def savePytorch(path : String, overWrite: Boolean = false): Unit = {
+    PytorchModel.updateWeightNative(this.nativeRef, weights.storage().array())
+    PytorchModel.saveModelNative(nativeRef, path)
+  }
 }
 
 object TorchNet {
-
-  PytorchModel.isLoaded
-  loadPytorchNatives() // load once per JVM
-
   private val modelBytesRegistry = new RegistryMap[Array[Byte]]()
 
   @transient
   private lazy val inDriver = NetUtils.isDriver
-
 
   class TorchModelHolder(@transient var torchBytes: Array[Byte], private var id: String)
     extends SerializationHolder {
@@ -201,25 +215,8 @@ object TorchNet {
     new TorchNet(new TorchModelHolder(modelbytes, modelPath))
   }
 
-  // extract libs from zoo jar file
-  private def loadPytorchNatives(): Unit = {
-    loadNativelib("pytorch/libpytorch-engine.so")
-  }
-
-  private def loadNativelib(path: String): Unit = {
-    val inputStream = TorchNet.getClass.getResourceAsStream(s"/${path}")
-    val file = File.createTempFile("PytorchLoader", "tmp")
-    val src = Channels.newChannel(inputStream)
-    val dest = new FileOutputStream(file).getChannel
-    dest.transferFrom(src, 0, Long.MaxValue)
-    dest.close()
-    src.close()
-    val filePath = file.getAbsolutePath
-    try {
-      System.load(filePath)
-    } finally {
-      file.delete()
-    }
+  def apply(modelBytes: Array[Byte]): TorchNet = {
+    new TorchNet(new TorchModelHolder(modelBytes, UUID.randomUUID().toString))
   }
 
   private[net] def loadPytorchModel(bytes: Array[Byte]): Long = {
@@ -238,5 +235,8 @@ object TorchNet {
     nativeRef
   }
 
+  def isTorchNet(module: Module[_]): Boolean = {
+    module.isInstanceOf[TorchNet]
+  }
 }
 

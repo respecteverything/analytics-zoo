@@ -22,19 +22,30 @@ import com.intel.analytics.zoo.pipeline.inference.DeviceType.DeviceTypeEnumVal
 object InferenceModelFactory extends InferenceSupportive {
 
   def loadFloatModel(modelPath: String): FloatModel = {
-    loadFloatModel(modelPath, null)
+    loadFloatModel(modelPath, null, false)
   }
 
-  def loadFloatModel(modelPath: String, weightPath: String)
+  def loadFloatModel(modelPath: String, weightPath: String, blas: Boolean = true)
   : FloatModel = {
-    val model = ModelLoader.loadFloatModel(modelPath, weightPath)
+    val model = if (blas) {
+      ModelLoader.loadFloatModel(modelPath, weightPath)
+    } else {
+      ModelLoader.loadFloatModel(modelPath, weightPath).quantize()
+    }
+
     model.evaluate()
     val metaModel = makeMetaModel(model)
     new FloatModel(model, metaModel, true)
   }
 
-  def loadFloatModelForCaffe(modelPath: String, weightPath: String): FloatModel = {
-    val model = ModelLoader.loadFloatModelForCaffe(modelPath, weightPath)
+  def loadFloatModelForCaffe(modelPath: String,
+                             weightPath: String,
+                             blas: Boolean = true): FloatModel = {
+    val model = if (blas) {
+      ModelLoader.loadFloatModelForCaffe(modelPath, weightPath)
+    } else {
+      ModelLoader.loadFloatModelForCaffe(modelPath, weightPath).quantize()
+    }
     model.evaluate()
     val metaModel = makeMetaModel(model)
     new FloatModel(model, metaModel, true)
@@ -47,6 +58,49 @@ object InferenceModelFactory extends InferenceSupportive {
     val sessionConfig = TFNet.SessionConfig(intraOpParallelismThreads,
       interOpParallelismThreads, usePerSessionThreads)
     val model = ModelLoader.loadFloatModelForTF(modelPath, sessionConfig)
+    model.evaluate()
+    val metaModel = makeMetaModel(model)
+    new FloatModel(model, metaModel, true)
+  }
+
+  def loadFloatModelForTFSavedModel(modelPath: String,
+                                    inputs: Array[String],
+                                    outputs: Array[String],
+                                    intraOpParallelismThreads: Int = 1,
+                                    interOpParallelismThreads: Int = 1,
+                                    usePerSessionThreads: Boolean = true): FloatModel = {
+    val sessionConfig = TFNet.SessionConfig(intraOpParallelismThreads,
+      interOpParallelismThreads, usePerSessionThreads)
+    val model = ModelLoader.loadFloatModelForTFSavedModel(modelPath, inputs, outputs, sessionConfig)
+    model.evaluate()
+    val metaModel = makeMetaModel(model)
+    new FloatModel(model, metaModel, true)
+  }
+
+  def loadFloatModelForTFSavedModelBytes(savedModelBytes: Array[Byte],
+                                         inputs: Array[String],
+                                         outputs: Array[String],
+                                         intraOpParallelismThreads: Int = 1,
+                                         interOpParallelismThreads: Int = 1,
+                                         usePerSessionThreads: Boolean = true): FloatModel = {
+    val sessionConfig = TFNet.SessionConfig(intraOpParallelismThreads,
+      interOpParallelismThreads, usePerSessionThreads)
+    val model = ModelLoader.
+      loadFloatModelForTFSavedModelBytes(savedModelBytes, inputs, outputs, sessionConfig)
+    model.evaluate()
+    val metaModel = makeMetaModel(model)
+    new FloatModel(model, metaModel, true)
+  }
+
+  def loadFloatModelForPyTorch(modelPath: String): FloatModel = {
+    val model = ModelLoader.loadFloatModelForPyTorch(modelPath)
+    model.evaluate()
+    val metaModel = makeMetaModel(model)
+    new FloatModel(model, metaModel, true)
+  }
+
+  def loadFloatModelForPyTorch(modelBytes: Array[Byte]): FloatModel = {
+    val model = ModelLoader.loadFloatModelForPyTorch(modelBytes)
     model.evaluate()
     val metaModel = makeMetaModel(model)
     new FloatModel(model, metaModel, true)

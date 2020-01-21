@@ -46,12 +46,13 @@ import com.intel.analytics.zoo.pipeline.api.autograd.{Lambda, Variable}
 import com.intel.analytics.zoo.pipeline.api.autograd._
 import com.intel.analytics.zoo.pipeline.api.keras.layers.Input
 import com.intel.analytics.zoo.pipeline.api.keras.layers.utils._
-import com.intel.analytics.zoo.pipeline.api.net.NetUtils
+import com.intel.analytics.zoo.pipeline.api.net.{NetUtils, TorchNet}
 import com.intel.analytics.zoo.pipeline.estimator.{AbstractEstimator, ConstantClipping, GradientClipping, L2NormClipping}
 import org.apache.commons.lang.exception.ExceptionUtils
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
 import org.apache.log4j.Logger
+import org.apache.spark.SparkContext
 import org.apache.spark.rdd.{RDD, ZippedPartitionsWithLocalityRDD}
 
 import scala.collection.JavaConverters._
@@ -547,6 +548,29 @@ abstract class KerasNet[T](implicit val tag: ClassTag[T], implicit val ev: Tenso
 
   def toModel(): Model[T]
 
+
+  /**
+   * Save model to keras2 h5 file. Only for inference
+   * @param filePath path to save model.
+   * @param python python path, need analytics-zoo and tensorflow installed.
+   */
+  def saveToKeras2[T: ClassTag](
+        filePath: String,
+        python: String = "python")(implicit ev: TensorNumeric[T]): Unit = {
+    Net.saveToKeras2[T](this, filePath, python)
+  }
+
+  /**
+   * Save model to tensorflow protobuf. Only for inference.
+   * @param dir directory to save model.
+   * @param python python path, need analytics-zoo and tensorflow installed.
+   */
+  def saveToTf[T: ClassTag](
+        dir: String,
+        python: String = "python")(implicit ev: TensorNumeric[T]): Unit = {
+    Net.saveToTf[T](this, dir, python)
+  }
+
   /**
    * Print out the summary information of an Analytics Zoo Keras Model.
    *
@@ -585,6 +609,10 @@ class Model[T: ClassTag] private (private val _inputs : Seq[ModuleNode[T]],
   KerasLayerRef(this).setInputShape(Shape(_inputs.map{n => n.element.getInputShape()}.toList))
 
   KerasLayerRef(this).setOutShape(Shape(_outputs.map{_.element.getOutputShape()}.toList))
+
+  private[zoo] def getInputs(): Seq[ModuleNode[T]] = _inputs
+
+  private[zoo] def getOutputs(): Seq[ModuleNode[T]] = _outputs
 
   override def isKerasStyle(): Boolean = true
 
@@ -640,6 +668,18 @@ class Model[T: ClassTag] private (private val _inputs : Seq[ModuleNode[T]],
   override def toModel(): Model[T] = this
 
   override def toKeras(): Model[T] = this
+
+  override private[zoo] def getKerasWeights(): Array[Tensor[Float]] = {
+    val weights = new ArrayBuffer[Tensor[Float]]()
+    modules(0).asInstanceOf[StaticGraph[T]].modules.foreach(m => {
+      val params = m.asInstanceOf[Net].getKerasWeights()
+      if (params != null) {
+        params.foreach(weights += _)
+      }
+    })
+    weights.toArray
+  }
+
 
   override def summary(
       lineLength: Int = 120,
@@ -892,6 +932,19 @@ class Sequential[T: ClassTag] private ()
     val graph = this.toModel()
     graph.summary(lineLength, positions)
   }
+
+  override private[zoo] def getKerasWeights(): Array[Tensor[Float]] = {
+    val weights = new ArrayBuffer[Tensor[Float]]()
+    modules(0).asInstanceOf[TSequential[T]].modules.foreach(m => {
+      val params = m.asInstanceOf[Net].getKerasWeights()
+      if (params != null) {
+        params.foreach{p =>
+          weights += p
+        }
+      }
+    })
+    weights.toArray
+  }
 }
 
 object Sequential extends KerasLayerSerializable {
@@ -907,6 +960,13 @@ object Sequential extends KerasLayerSerializable {
 
 private[zoo] object InternalOptimizerUtil {
 
+  def setExecutorMklThread(cachedModels: RDD[_]): Unit = {
+    cachedModels.mapPartitions{_ =>
+      val numCores = scala.sys.env("OMP_NUM_THREADS").toInt
+      EngineRef.getDefaultThreadPool().setMKLThread(numCores)
+      Iterator.single(1)
+    }.count()
+  }
 
   def getModelCacheFromOptimizer[T: ClassTag](
         optimizer: Optimizer[T, MiniBatch[T]]): RDD[Cache[T]] = {
@@ -1031,7 +1091,23 @@ private[zoo] class InternalDistriOptimizer[T: ClassTag] (
     state("isLayerwiseScaled") = com.intel.analytics.bigdl.nn.Utils.isLayerwiseScaled(_model)
 
     val nodeNumber = EngineRef.getNodeNumber()
-    val coresPerNode = EngineRef.getCoreNumber()
+
+    /**
+     * The best practice of torchnet's training is single model in each executor.
+     * And use multi OMP threads to speedup the single model's training.
+     * Currently, we only provide single model + multi OMP threads for torchnet model.
+     * TODO: support tfnet.
+     */
+    val torchNetOptimize = TorchNet.isTorchNet(model)
+    val modelPerExecutor = if (torchNetOptimize) {
+      require(EngineRef.getEngineType() != MklDnn, "torchnet shouldn't use MKLDNN engine.")
+      val numOmpThread = distDataset.originRDD().sparkContext
+        .getConf.get("spark.executorEnv.OMP_NUM_THREADS").toInt
+      logger.info(s"torchnet will use ${numOmpThread} OMP threads.")
+      1
+    } else {
+      EngineRef.getCoreNumber()
+    }
 
     val partitionNum = distDataset.originRDD().partitions.length
     val modelParameters = InternalOptimizerUtil.getParametersFromModel(trainingModel)
@@ -1073,9 +1149,12 @@ private[zoo] class InternalDistriOptimizer[T: ClassTag] (
 
       val modelsAndBroadcast = InternalOptimizerUtil.initThreadModels[T](
         trainingModel, distDataset, criterion, state,
-        Int.box(nodeNumber), Int.box(coresPerNode), Boolean.box(checkSingleton),
+        Int.box(nodeNumber), Int.box(modelPerExecutor), Boolean.box(checkSingleton),
         allReduceParameter, parameterSplits, validationMethods, optimMethods, parameterProcessors)
       cachedModels = modelsAndBroadcast._1
+      if (torchNetOptimize) {
+        InternalOptimizerUtil.setExecutorMklThread(cachedModels)
+      }
       modelBroadcast = modelsAndBroadcast._2
     }
 
@@ -1099,7 +1178,7 @@ private[zoo] class InternalDistriOptimizer[T: ClassTag] (
         InternalOptimizerUtil.optimizeModels[T](
           trainingModel,
           distDataset,
-          Int.box(coresPerNode),
+          Int.box(modelPerExecutor),
           state,
           endWhen,
           metrics,
@@ -1163,7 +1242,7 @@ private[zoo] class InternalDistriOptimizer[T: ClassTag] (
             }
             val modelsAndBroadcast = InternalOptimizerUtil.initThreadModels[T](
               newModel, distDataset, criterion, state,
-              Int.box(nodeNumber), Int.box(coresPerNode), Boolean.box(checkSingleton),
+              Int.box(nodeNumber), Int.box(modelPerExecutor), Boolean.box(checkSingleton),
               allReduceParameter, parameterSplits, validationMethods, optimMethods)
             cachedModels = modelsAndBroadcast._1
             modelBroadcast = modelsAndBroadcast._2

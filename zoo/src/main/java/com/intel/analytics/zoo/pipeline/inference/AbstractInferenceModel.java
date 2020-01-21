@@ -36,19 +36,19 @@ public abstract class AbstractInferenceModel extends InferenceModel implements S
   }
 
   public void load(String modelPath) {
-    doLoad(modelPath, null);
+    doLoad(modelPath, null, true);
   }
 
   public void load(String modelPath, String weightPath) {
-    doLoad(modelPath, weightPath);
+    doLoad(modelPath, weightPath, true);
   }
 
   public void loadCaffe(String modelPath) {
-    doLoadCaffe(modelPath, null);
+    doLoadCaffe(modelPath, null, true);
   }
 
   public void loadCaffe(String modelPath, String weightPath) {
-    doLoadCaffe(modelPath, weightPath);
+    doLoadCaffe(modelPath, weightPath, true);
   }
 
   public void loadTF(String modelPath) {
@@ -57,6 +57,30 @@ public abstract class AbstractInferenceModel extends InferenceModel implements S
 
   public void loadTF(String modelPath, int intraOpParallelismThreads, int interOpParallelismThreads, boolean usePerSessionThreads) {
     doLoadTF(modelPath, intraOpParallelismThreads, interOpParallelismThreads, usePerSessionThreads);
+  }
+
+  public void loadTF(String modelPath, String[] inputs, String[] outputs) {
+    doLoadTF(modelPath, inputs, outputs);
+  }
+
+  public void loadTF(String modelPath, String[] inputs, String[] outputs, int intraOpParallelismThreads, int interOpParallelismThreads, boolean usePerSessionThreads) {
+    doLoadTF(modelPath, inputs, outputs, intraOpParallelismThreads, interOpParallelismThreads, usePerSessionThreads);
+  }
+
+  public void loadTF(byte[] savedModelBytes, String[] inputs, String[] outputs) {
+    doLoadTF(savedModelBytes, inputs, outputs);
+  }
+
+  public void loadTF(byte[] savedModelBytes, String[] inputs, String[] outputs, int intraOpParallelismThreads, int interOpParallelismThreads, boolean usePerSessionThreads) {
+    doLoadTF(savedModelBytes, inputs, outputs, intraOpParallelismThreads, interOpParallelismThreads, usePerSessionThreads);
+  }
+
+  public void loadPyTorch(String modelPath) {
+    doLoadPyTorch(modelPath);
+  }
+
+  public void loadPyTorch(byte[] modelBytes) {
+    doLoadPyTorch(modelBytes);
   }
 
   public void loadTF(String modelPath, String objectDetectionModelType) {

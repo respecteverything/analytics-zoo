@@ -19,10 +19,12 @@ import sys
 
 from bigdl.dataset.dataset import DataSet
 from bigdl.transform.vision.image import FeatureTransformer
-from bigdl.util.common import get_node_and_core_number, callBigDlFunc
+from bigdl.util.common import get_node_and_core_number
+from zoo.common.utils import callZooFunc
 from zoo.common import Sample, JTensor
 from zoo.common.nncontext import getOrCreateSparkContext
-from zoo.feature.image import ImagePreprocessing
+from zoo.feature.common import FeatureSet, SampleToMiniBatch
+from zoo.feature.image import ImagePreprocessing, ImageFeatureToSample
 from zoo.util import nest
 
 if sys.version >= '3':
@@ -293,6 +295,9 @@ class TFDataset(object):
         """
         raise NotImplementedError
 
+    def map(self, map_fn):
+        return MapDataset(self, map_fn)
+
     @staticmethod
     def from_rdd(*args, **kwargs):
         """
@@ -341,6 +346,10 @@ class TFDataset(object):
         batch_size/total_core_num (training) or batch_per_thread for inference; if False,
         it is None.
         :param val_rdd: validation data with the same structure of rdd
+        :param sequential_order: whether to iterate the elements in the Dataset
+                                 in sequential order when training.
+        :param shuffle: whether to shuffle the elements in each partition before each epoch
+                        when training
         :return: a TFDataset
         """
         return TFNdarrayDataset.from_rdd(*args, **kwargs)
@@ -364,14 +373,21 @@ class TFDataset(object):
         batch_size/total_core_num (training) or batch_per_thread for inference; if False,
         it is None.
         :param val_tensors: the numpy ndarrays used for validation during training
-        :return:
+        :param sequential_order: whether to iterate the elements in the Dataset
+                                 in sequential order when training.
+        :param shuffle: whether to shuffle the elements in each partition before each epoch
+                        when training
+        :return: a TFDataset
         """
         return TFNdarrayDataset.from_ndarrays(*args, **kwargs)
 
     @staticmethod
     def from_image_set(image_set, image, label=None,
                        batch_size=-1, batch_per_thread=-1,
-                       hard_code_batch_size=False, validation_image_set=None):
+                       hard_code_batch_size=False,
+                       validation_image_set=None,
+                       sequential_order=False,
+                       shuffle=True):
         """
         Create a TFDataset from a ImagetSet. Each ImageFeature in the ImageSet should
         already has the "sample" field, i.e. the result of ImageSetToSample transformer
@@ -389,17 +405,23 @@ class TFDataset(object):
         batch_size/total_core_num (training) or batch_per_thread for inference; if False,
         it is None.
         :param validation_image_set: the ImageSet used for validation during training
-        :return:
+        :param sequential_order: whether to iterate the elements in the Dataset
+                                 in sequential order when training.
+        :param shuffle: whether to shuffle the elements in each partition before each epoch
+                        when training
+        :return: a TFDataset
         """
         tensor_structure = TFDataset._to_tensor_structure(image, label)
         return TFImageDataset(image_set, tensor_structure, batch_size,
                               batch_per_thread, hard_code_batch_size,
-                              validation_image_set)
+                              validation_image_set,
+                              sequential_order=sequential_order, shuffle=shuffle)
 
     @staticmethod
     def from_text_set(text_set, text, label=None,
                       batch_size=-1, batch_per_thread=-1,
-                      hard_code_batch_size=False, validation_image_set=None):
+                      hard_code_batch_size=False, validation_image_set=None,
+                      sequential_order=False, shuffle=True):
         """
         Create a TFDataset from a TextSet. The TextSet must be transformed to Sample, i.e.
         the result of TextFeatureToSample transformer.
@@ -418,21 +440,27 @@ class TFDataset(object):
         batch_size/total_core_num (training) or batch_per_thread for inference; if False,
         it is None.
         :param validation_image_set: The TextSet used for validation during training
-        :return:
+        :param sequential_order: whether to iterate the elements in the Dataset
+                                 in sequential order when training.
+        :param shuffle: whether to shuffle the elements in each partition before each epoch
+                        when training
+        :return: a TFDataset
         """
         tensor_structure = TFDataset._to_tensor_structure(text, label)
         return TFTextDataset(text_set, tensor_structure, batch_size,
                              batch_per_thread, hard_code_batch_size,
-                             validation_image_set)
+                             validation_image_set,
+                             sequential_order=sequential_order, shuffle=shuffle)
 
     @staticmethod
-    def from_tfrecord(file_path, parse_fn, batch_size=-1, batch_per_thread=-1,
-                      hard_code_batch_size=False, validation_file_path=None):
+    def from_tfrecord_file(sc, file_path, batch_size=-1, batch_per_thread=-1,
+                           hard_code_batch_size=False, validation_file_path=None,
+                           sequential_order=False, shuffle=True):
         """
         Create a TFDataset from tfrecord files.
+        :param sc: The SparkContext
         :param file_path: comma seperated tfrecord file(s) path
-        :param parse_fn: a TensorFlow function that takes a serialized example string to a nested
-        structure of tensors. Follows the signature:
+            structure of tensors. Follows the signature:
             * Args:
                 * `example`: a string TensorFlow tensor representing a single record
             * Returns:
@@ -446,18 +474,37 @@ class TFDataset(object):
         batch_size/total_core_num (training) or batch_per_thread for inference; if False,
         it is None.
         :param validation_file_path: The tfrecord files used for validation
-        :return:
+        :param sequential_order: whether to iterate the elements in the Dataset
+                                 in sequential order when training.
+        :param shuffle: whether to shuffle the elements in each partition before each epoch
+                        when training
+        :return: a TFDataset
         """
+        input_format_class = "org.tensorflow.hadoop.io.TFRecordFileInputFormat"
+        key_class = "org.apache.hadoop.io.BytesWritable"
+        value_class = "org.apache.hadoop.io.NullWritable"
+        bytes_rdd = sc.newAPIHadoopFile(file_path, input_format_class,
+                                        keyClass=key_class,
+                                        valueClass=value_class)
+        bytes_rdd = bytes_rdd.map(lambda record: bytearray(record[0]))
+        validation_bytes_rdd = None
+        if validation_file_path is not None:
+            validation_bytes_rdd = sc.newAPIHadoopFile(validation_file_path,
+                                                       input_format_class,
+                                                       keyClass=key_class,
+                                                       valueClass=value_class)
+            validation_bytes_rdd = validation_bytes_rdd.map(lambda record: bytearray(record[0]))
 
-        return TFRecordDataset(file_path, parse_fn, batch_size, batch_per_thread,
-                               hard_code_batch_size, validation_file_path)
+        return TFBytesDataset(bytes_rdd, batch_size, batch_per_thread,
+                              hard_code_batch_size, validation_bytes_rdd,
+                              sequential_order=sequential_order, shuffle=shuffle)
 
     @staticmethod
     def from_feature_set(dataset, features, labels=None, batch_size=-1, batch_per_thread=-1,
                          hard_code_batch_size=False, validation_dataset=None):
         """
         Create a TFDataset from a FeatureSet. Currently, the element in this Feature set must be a
-        ImageFeature that has a sample field, i.e. the result of ImageSetToSample transformer
+        Sample, i.e. the result of ImageFeatureToSample transformer
         :param dataset: the feature set used to create this TFDataset
         :param features: a tuple of two, the first element is the type of this input feature,
         the second element is the shape of this element, i.e. (tf.float32, [224, 224, 3])).
@@ -473,12 +520,110 @@ class TFDataset(object):
         batch_size/total_core_num (training) or batch_per_thread for inference; if False,
         it is None.
         :param validation_dataset: The FeatureSet used for validation during training
-        :return:
+        :return: a TFDataset
         """
         tensor_structure = TFDataset._to_tensor_structure(features, labels)
 
         return TFFeatureDataset(dataset, tensor_structure, batch_size,
-                                batch_per_thread, hard_code_batch_size, validation_dataset)
+                                batch_per_thread, hard_code_batch_size,
+                                validation_dataset)
+
+    @staticmethod
+    def from_string_rdd(string_rdd, batch_size=-1, batch_per_thread=-1,
+                        hard_code_batch_size=False, validation_string_rdd=None):
+        """
+        Create a TFDataset from a RDD of strings. Each element is the RDD should be a single string.
+        The returning TFDataset's feature_tensors has only one Tensor. the type of the Tensor
+        is tf.string, and the shape is (None,). The returning don't have label_tensors. If the
+        dataset is used for training, the label should be encoded in the string.
+        :param string_rdd: the RDD of strings
+        :param batch_size: the batch size, used for training, should be a multiple of
+        total core num
+        :param batch_per_thread: the batch size for each thread, used for inference or evaluation
+        :param hard_code_batch_size: whether to hard code the batch_size into tensorflow graph,
+        if True, the static size of the first dimension of the resulting tensors is
+        batch_size/total_core_num (training) or batch_per_thread for inference; if False,
+        it is None.
+        :param validation_string_rdd: the RDD of strings to be used in validation
+        :return: a TFDataset
+        """
+        string_rdd = string_rdd.map(lambda x: bytearray(x, "utf-8"))
+        if validation_string_rdd is not None:
+            validation_string_rdd = validation_string_rdd.map(lambda x: bytearray(x, "utf-8"))
+        return TFBytesDataset(string_rdd, batch_size, batch_per_thread,
+                              hard_code_batch_size, validation_string_rdd)
+
+    @staticmethod
+    def from_bytes_rdd(bytes_rdd, batch_size=-1, batch_per_thread=-1,
+                       hard_code_batch_size=False, validation_bytes_rdd=None):
+        """
+        Create a TFDataset from a RDD of bytes. Each element is the RDD should be a bytes object.
+        The returning TFDataset's feature_tensors has only one Tensor. the type of the Tensor
+        is tf.string, and the shape is (None,). The returning don't have label_tensors. If the
+        dataset is used for training, the label should be encoded in the bytes.
+        :param bytes_rdd: the RDD of bytes
+        :param batch_size: the batch size, used for training, should be a multiple of
+        total core num
+        :param batch_per_thread: the batch size for each thread, used for inference or evaluation
+        :param hard_code_batch_size: whether to hard code the batch_size into tensorflow graph,
+        if True, the static size of the first dimension of the resulting tensors is
+        batch_size/total_core_num (training) or batch_per_thread for inference; if False,
+        it is None.
+        :param validation_bytes_rdd: the RDD of bytes to be used in validation
+        :return: a TFDataset
+        """
+        return TFBytesDataset(bytes_rdd, batch_size, batch_per_thread,
+                              hard_code_batch_size, validation_bytes_rdd)
+
+
+class MapDataset(TFDataset):
+
+    def __init__(self, pre_dataset, map_fn):
+        self.pre_dataset = pre_dataset
+        self.map_fn = map_fn
+        super(MapDataset, self).__init__(self.pre_dataset.tensor_structure,
+                                         self.pre_dataset.batch_size,
+                                         self.pre_dataset.batch_per_thread,
+                                         self.pre_dataset.hard_code_batch_size)
+
+    def _create_placeholders(self):
+        self._tensors = self.map_fn(self.pre_dataset.tensors)
+        self._original_tensors = self.pre_dataset._original_tensors
+        return self._tensors
+
+    def get_prediction_data(self):
+        """
+        :return: an object that can be used for TFNet.predict
+        e.g. an RDD of Sample or a ImageSet
+        """
+        return self.pre_dataset.get_prediction_data()
+
+    def get_evaluation_data(self):
+        """
+        :return: an object that can be used for TFNet.evaluate,
+        e.g. an RDD of Sample or a ImageSet
+        """
+        return self.pre_dataset.get_evaluation_data()
+
+    def get_training_data(self):
+        """
+        :return: an object that can be used to create a BigDL optimizer,
+        e.g. an RDD of Sample or a DataSet
+        """
+        return self.pre_dataset.get_training_data()
+
+    def get_validation_data(self):
+        """
+        :return: an object that can be used to set validation in a BigDL optimizer,
+        e.g. an RDD of Sample or a DataSet
+        """
+        return self.pre_dataset.get_validation_data()
+
+    def get_num_partitions(self):
+        """
+        :return: the num of partitions of the underlying RDD
+        """
+        return self.pre_dataset.get_num_partitions()
 
 
 class TFFeatureDataset(TFDataset):
@@ -497,95 +642,116 @@ class TFFeatureDataset(TFDataset):
         raise Exception("TFFeatureDataset is only supported in training")
 
     def get_training_data(self):
-        return self.dataset.transform(MergeFeatureLabelFeatureTransformer()).to_dataset()
+        fs = self.dataset.transform(MergeFeatureLabelFeatureTransformer())
+        fs = fs.transform(SampleToMiniBatch(self.batch_size))
+        return fs
 
     def get_validation_data(self):
         if self.validation_dataset is not None:
-            return self.validation_dataset.transform(
-                MergeFeatureLabelFeatureTransformer()).to_dataset()
+            fs = self.validation_dataset.transform(
+                MergeFeatureLabelFeatureTransformer())
+            fs = fs.transform(SampleToMiniBatch(self.batch_size))
+            return fs
         return None
 
+    def get_num_partitions(self):
+        raise NotImplementedError()
 
-class TFRecordDataset(TFDataset):
+
+class TFBytesDataset(TFDataset):
 
     def get_num_partitions(self):
         self.train_rdd.getNumPartitions()
 
-    def __init__(self, file_path, parse_fn, batch_size,
-                 batch_per_thread, hard_code_batch_size=False, validation_file_path=None):
+    def __init__(self, string_rdd, batch_size,
+                 batch_per_thread, hard_code_batch_size=False,
+                 validation_string_rdd=None, sequential_order=False, shuffle=True):
         import tensorflow as tf
-        g = tf.Graph()
-        with g.as_default():
-            serialized_example = tf.placeholder(dtype=tf.string, shape=[])
-            results = parse_fn(serialized_example)
+        tensor_structure = (TensorMeta(dtype=tf.string, shape=(), name="input"),)
 
-            flattened = nest.flatten(results)
-            output_names = [tf.cast(t, dtype=tf.float32).name for t in flattened]
+        super(TFBytesDataset, self).__init__(tensor_structure, batch_size,
+                                             batch_per_thread, hard_code_batch_size)
 
-        serialized_graph = bytearray(g.as_graph_def().SerializeToString())
-
-        sc = getOrCreateSparkContext()
-        train_rdd = callBigDlFunc("float", "createRDDFromTFRecords",
-                                  file_path, sc, serialized_graph,
-                                  serialized_example.name, output_names)
-        validation_rdd = None
-        if validation_file_path is not None:
-            validation_rdd = callBigDlFunc("float", "createRDDFromTFRecords",
-                                           validation_file_path, sc, serialized_graph,
-                                           serialized_example.name, output_names)
-
-        tensor_structure = nest.pack_sequence_as(results,
-                                                 [TensorMeta(tf.as_dtype(t.dtype),
-                                                  shape=t.shape,
-                                                  name="data_%s" % i)
-                                                  for i, t in enumerate(nest.flatten(results))])
-
-        super(TFRecordDataset, self).__init__(tensor_structure, batch_size,
-                                              batch_per_thread, hard_code_batch_size)
-
-        self.train_rdd = train_rdd
-        self.validation_rdd = validation_rdd
+        self.train_rdd = string_rdd
+        self.validation_rdd = validation_string_rdd
+        self.sequential_order = sequential_order
+        self.shuffle = shuffle
 
     def get_prediction_data(self):
-        return self.train_rdd
+        jvalue = callZooFunc("float", "createMiniBatchRDDFromStringRDD",
+                             self.train_rdd,
+                             self.batch_per_thread)
+        rdd = jvalue.value().toJavaRDD()
+        return rdd
 
     def get_evaluation_data(self):
-        return self.train_rdd
+        raise NotImplementedError()
 
     def get_training_data(self):
-        return self.train_rdd
+        jvalue = callZooFunc("float", "createMiniBatchRDDFromStringRDD",
+                             self.train_rdd,
+                             self.batch_size)
+        rdd = jvalue.value().toJavaRDD()
+        fs = FeatureSet.rdd(rdd,
+                            sequential_order=self.sequential_order,
+                            shuffle=self.shuffle)
+        return fs
 
     def get_validation_data(self):
-        return self.validation_rdd
+        if self.validation_rdd is not None:
+            jvalue = callZooFunc("float", "createMiniBatchRDDFromStringRDD",
+                                 self.validation_rdd,
+                                 self.batch_size)
+            rdd = jvalue.value().toJavaRDD()
+            fs = FeatureSet.rdd(rdd,
+                                sequential_order=self.sequential_order,
+                                shuffle=self.shuffle)
+            return fs
+        return None
 
 
 class TFTextDataset(TFDataset):
 
     def __init__(self, text_set, tensor_structure, batch_size,
-                 batch_per_thread, hard_code_batch_size=False, validation_text_set=None):
+                 batch_per_thread, hard_code_batch_size=False,
+                 validation_text_set=None, sequential_order=False, shuffle=True):
         super(TFTextDataset, self).__init__(tensor_structure, batch_size,
                                             batch_per_thread, hard_code_batch_size)
         self.text_set = text_set
         self.validation_text_set = validation_text_set
+        self.sequential_order = sequential_order
+        self.shuffle = shuffle
 
     def get_prediction_data(self):
-        return self.text_set.get_samples().map(
+        rdd = self.text_set.get_samples().map(
             lambda sample: Sample.from_jtensor(features=sample.features,
                                                labels=JTensor.from_ndarray(np.array([0.0]))))
+        rdd_wrapper = callZooFunc("float", "zooRDDSampleToMiniBatch", rdd, self.batch_per_thread)
+        return rdd_wrapper.value().toJavaRDD()
 
     def get_evaluation_data(self):
         return self.text_set.get_samples()
 
     def get_training_data(self):
-        return self.text_set.get_samples().map(
+        sample_rdd = self.text_set.get_samples().map(
             lambda sample: Sample.from_jtensor(features=sample.features + sample.labels,
                                                labels=JTensor.from_ndarray(np.array([0.0]))))
+        fs = FeatureSet.sample_rdd(sample_rdd,
+                                   sequential_order=self.sequential_order,
+                                   shuffle=self.shuffle)
+        fs = fs.transform(SampleToMiniBatch(self.batch_size))
+        return fs
 
     def get_validation_data(self):
         if self.validation_text_set is not None:
-            return self.validation_text_set.get_samples().map(
+            sample_rdd = self.validation_text_set.get_samples().map(
                 lambda sample: Sample.from_jtensor(features=sample.features + sample.labels,
                                                    labels=JTensor.from_ndarray(np.array([0.0]))))
+            fs = FeatureSet.sample_rdd(sample_rdd,
+                                       sequential_order=self.sequential_order,
+                                       shuffle=self.shuffle)
+            fs = fs.transform(SampleToMiniBatch(self.batch_size))
+            return fs
         return None
 
     def get_num_partitions(self):
@@ -594,11 +760,15 @@ class TFTextDataset(TFDataset):
 
 class TFImageDataset(TFDataset):
     def __init__(self, image_set, tensor_structure, batch_size,
-                 batch_per_thread, hard_code_batch_size=False, validation_image_set=None):
+                 batch_per_thread, hard_code_batch_size=False,
+                 validation_image_set=None,
+                 sequential_order=False, shuffle=True):
         super(TFImageDataset, self).__init__(tensor_structure, batch_size,
                                              batch_per_thread, hard_code_batch_size)
         self.image_set = image_set
         self.validation_image_set = validation_image_set
+        self.sequential_order = sequential_order
+        self.shuffle = shuffle
 
     def get_prediction_data(self):
         return self.image_set
@@ -607,15 +777,24 @@ class TFImageDataset(TFDataset):
         return self.image_set.to_image_frame()
 
     def get_training_data(self):
-        return DataSet.image_frame(self.image_set
-                                   .transform(MergeFeatureLabelImagePreprocessing())
-                                   .to_image_frame())
+        fs = FeatureSet.image_set(self.image_set,
+                                  sequential_order=self.sequential_order,
+                                  shuffle=self.shuffle)
+        fs = fs.transform(MergeFeatureLabelImagePreprocessing())
+        fs = fs.transform(ImageFeatureToSample())
+        fs = fs.transform(SampleToMiniBatch(self.batch_size))
+
+        return fs
 
     def get_validation_data(self):
         if self.validation_image_set is not None:
-            return DataSet.image_frame(self.validation_image_set.
-                                       transform(MergeFeatureLabelImagePreprocessing())
-                                       .to_image_frame())
+            fs = FeatureSet.image_set(self.validation_image_set,
+                                      sequential_order=self.sequential_order,
+                                      shuffle=self.shuffle)
+            fs = fs.transform(MergeFeatureLabelImagePreprocessing())
+            fs = fs.transform(ImageFeatureToSample())
+            fs = fs.transform(SampleToMiniBatch(self.batch_size))
+            return fs
         return None
 
     def get_num_partitions(self):
@@ -625,18 +804,22 @@ class TFImageDataset(TFDataset):
 class TFNdarrayDataset(TFDataset):
 
     def __init__(self, rdd, tensor_structure, batch_size,
-                 batch_per_thread, hard_code_batch_size=False, val_rdd=None):
+                 batch_per_thread, hard_code_batch_size=False,
+                 val_rdd=None, sequential_order=True, shuffle=False):
 
         super(TFNdarrayDataset, self).__init__(tensor_structure, batch_size,
                                                batch_per_thread, hard_code_batch_size)
 
         self.val_rdd = val_rdd
         self.rdd = rdd
+        self.sequential_order = sequential_order
+        self.shuffle = shuffle
 
     def get_prediction_data(self):
-        data = self.rdd.map(lambda t: Sample.from_ndarray(
+        rdd = self.rdd.map(lambda t: Sample.from_ndarray(
             nest.flatten(t[0] if isinstance(t, tuple) else t), np.array([0.0])))
-        return data
+        rdd_wrapper = callZooFunc("float", "zooRDDSampleToMiniBatch", rdd, self.batch_per_thread)
+        return rdd_wrapper.value().toJavaRDD()
 
     def get_evaluation_data(self):
         if isinstance(self.tensor_structure, tuple):
@@ -645,12 +828,23 @@ class TFNdarrayDataset(TFDataset):
         return self.rdd.map(lambda t: Sample.from_ndarray(nest.flatten(t), np.array([0.0])))
 
     def get_training_data(self):
-        return self.rdd.map(lambda t: Sample.from_ndarray(nest.flatten(t), np.array([0.0])))
+        sample_rdd = self.rdd.map(
+            lambda t: Sample.from_ndarray(nest.flatten(t), np.array([0.0])))
+        fs = FeatureSet.sample_rdd(sample_rdd,
+                                   sequential_order=self.sequential_order,
+                                   shuffle=self.shuffle)
+        fs = fs.transform(SampleToMiniBatch(self.batch_size))
+        return fs
 
     def get_validation_data(self):
         if self.val_rdd is not None:
-            return self.val_rdd.map(lambda t: Sample.from_ndarray(nest.flatten(t),
-                                                                  np.array([0.0])))
+            sample_rdd = self.val_rdd.map(
+                lambda t: Sample.from_ndarray(nest.flatten(t), np.array([0.0])))
+            fs = FeatureSet.sample_rdd(sample_rdd,
+                                       sequential_order=self.sequential_order,
+                                       shuffle=self.shuffle)
+            fs = fs.transform(SampleToMiniBatch(self.batch_size))
+            return fs
         return None
 
     def get_num_partitions(self):
@@ -660,7 +854,9 @@ class TFNdarrayDataset(TFDataset):
     def from_rdd(rdd, names=None, shapes=None, types=None,
                  batch_size=-1, batch_per_thread=-1,
                  hard_code_batch_size=False, val_rdd=None,
-                 features=None, labels=None):
+                 features=None, labels=None,
+                 sequential_order=False,
+                 shuffle=True):
 
         import tensorflow as tf
 
@@ -675,7 +871,9 @@ class TFNdarrayDataset(TFDataset):
 
             return TFNdarrayDataset(rdd, tensor_structure,
                                     batch_size, batch_per_thread,
-                                    hard_code_batch_size, val_rdd)
+                                    hard_code_batch_size, val_rdd,
+                                    sequential_order=sequential_order,
+                                    shuffle=shuffle)
 
         if names is not None or shapes is not None or types is not None:
             if not names:
@@ -693,11 +891,13 @@ class TFNdarrayDataset(TFDataset):
 
         return TFNdarrayDataset(rdd, tensor_structure,
                                 batch_size, batch_per_thread,
-                                hard_code_batch_size, val_rdd)
+                                hard_code_batch_size, val_rdd,
+                                sequential_order=sequential_order, shuffle=shuffle)
 
     @staticmethod
     def from_ndarrays(tensors, batch_size=-1, batch_per_thread=-1,
-                      hard_code_batch_size=False, val_tensors=None):
+                      hard_code_batch_size=False, val_tensors=None,
+                      sequential_order=False, shuffle=True):
         sc = getOrCreateSparkContext()
         node_num, core_num = get_node_and_core_number()
         total_core_num = node_num * core_num
@@ -709,4 +909,5 @@ class TFNdarrayDataset(TFDataset):
             val_rdd, _ = _tensors_to_rdd(val_tensors, sc, total_core_num)
 
         return TFNdarrayDataset(rdd, tensor_structure, batch_size,
-                                batch_per_thread, hard_code_batch_size, val_rdd)
+                                batch_per_thread, hard_code_batch_size,
+                                val_rdd, sequential_order=sequential_order, shuffle=shuffle)

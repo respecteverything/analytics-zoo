@@ -16,13 +16,14 @@
 
 package com.intel.analytics.zoo.pipeline.inference
 
+import java.io.FileWriter
 import java.lang.{Float => JFloat, Integer => JInt}
 import java.util
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.{List => JList}
 
 import com.intel.analytics.bigdl.nn.abstractnn.Activity
-import com.intel.analytics.zoo.pipeline.inference.DeviceType.DeviceTypeEnumVal
+import com.sun.xml.internal.bind.v2.TODO
 
 import scala.collection.JavaConverters._
 
@@ -35,6 +36,8 @@ class InferenceModel(private var autoScalingEnabled: Boolean = true,
 
   require(concurrentNum > 0, "concurrentNum should > 0")
 
+  private var batchCnt: Int = 0
+  @transient var inferenceSummary: InferenceSummary = null
   /**
    * default constructor, will create a InferenceModel with auto-scaling enabled.
    *
@@ -74,9 +77,11 @@ class InferenceModel(private var autoScalingEnabled: Boolean = true,
    * @param modelPath  the file path of the model
    * @param weightPath the file path of the weights
    */
-  def doLoad(modelPath: String, weightPath: String = null): Unit = {
+  def doLoad(modelPath: String,
+             weightPath: String = null,
+             blas: Boolean = true): Unit = {
     clearModelQueue()
-    this.originalModel = InferenceModelFactory.loadFloatModel(modelPath, weightPath)
+    this.originalModel = InferenceModelFactory.loadFloatModel(modelPath, weightPath, blas)
     offerModelQueue()
   }
 
@@ -86,25 +91,27 @@ class InferenceModel(private var autoScalingEnabled: Boolean = true,
    * @param modelPath  the path of the prototxt file
    * @param weightPath the path of the caffemodel file
    */
-  def doLoadCaffe(modelPath: String, weightPath: String): Unit = {
+  def doLoadCaffe(modelPath: String,
+                  weightPath: String,
+                  blas: Boolean = true): Unit = {
     clearModelQueue()
-    this.originalModel = InferenceModelFactory.loadFloatModelForCaffe(modelPath, weightPath)
+    this.originalModel = InferenceModelFactory.loadFloatModelForCaffe(modelPath, weightPath, blas)
     offerModelQueue()
   }
 
   /**
-   * loads a TF model as TFNet
+   * loads a TF frozen model as TFNet
    *
-   * @param modelPath the path of the tensorflow model file
+   * @param modelPath the path of the tensorflow frozen model file
    */
   def doLoadTF(modelPath: String): Unit = {
     doLoadTensorflowModel(modelPath, 1, 1, true)
   }
 
   /**
-   * loads a TF model as TFNet
+   * loads a TF frozen model as TFNet
    *
-   * @param modelPath                 the path of the tensorflow model
+   * @param modelPath                 the path of the tensorflow frozen model
    * @param intraOpParallelismThreads the num of intraOpParallelismThreads
    * @param interOpParallelismThreads the num of interOpParallelismThreads
    * @param usePerSessionThreads      whether to perSessionThreads
@@ -118,6 +125,100 @@ class InferenceModel(private var autoScalingEnabled: Boolean = true,
       intraOpParallelismThreads,
       interOpParallelismThreads,
       usePerSessionThreads)
+  }
+
+  /**
+   * loads a TF saved model as TFNet
+   *
+   * @param modelPath  the path of the tensorflow saved model dir
+   * @param inputs     the inputs of the model
+   * @param outputs    the outputs of the model
+   */
+  def doLoadTF(modelPath: String,
+               inputs: Array[String],
+               outputs: Array[String]): Unit = {
+    doLoadTensorflowSavedModel(modelPath, inputs, outputs, 1, 1, true)
+  }
+
+  /**
+   * loads a TF saved model as TFNet
+   *
+   * @param modelPath                  the path of the tensorflow saved model dir
+   * @param inputs                     the inputs of the model
+   * @param outputs                    the outputs of the model
+   * @param intraOpParallelismThreads  the num of intraOpParallelismThreads
+   * @param interOpParallelismThreads  the num of interOpParallelismThreads
+   * @param usePerSessionThreads       whether to perSessionThreads
+   */
+  def doLoadTF(modelPath: String,
+               inputs: Array[String],
+               outputs: Array[String],
+               intraOpParallelismThreads: Int,
+               interOpParallelismThreads: Int,
+               usePerSessionThreads: Boolean): Unit = {
+    doLoadTensorflowSavedModel(
+      modelPath,
+      inputs,
+      outputs,
+      intraOpParallelismThreads,
+      interOpParallelismThreads,
+      usePerSessionThreads)
+  }
+
+  /**
+   * loads a TF saved model as TFNet
+   *
+   * @param savedModelBytes the bytes of the tensorflow saved model tar
+   * @param inputs          the inputs of the model
+   * @param outputs         the outputs of the model
+   */
+  def doLoadTF(savedModelBytes: Array[Byte],
+               inputs: Array[String],
+               outputs: Array[String]): Unit = {
+    doLoadTensorflowSavedModel(savedModelBytes, inputs, outputs, 1, 1, true)
+  }
+
+  /**
+   * loads a TF saved model as TFNet
+   *
+   * @param savedModelBytes           the bytes of the tensorflow saved model tar
+   * @param inputs                    the inputs of the model
+   * @param outputs                   the outputs of the model
+   * @param intraOpParallelismThreads the num of intraOpParallelismThreads
+   * @param interOpParallelismThreads the num of interOpParallelismThreads
+   * @param usePerSessionThreads      whether to perSessionThreads
+   */
+  def doLoadTF(savedModelBytes: Array[Byte],
+               inputs: Array[String],
+               outputs: Array[String],
+               intraOpParallelismThreads: Int,
+               interOpParallelismThreads: Int,
+               usePerSessionThreads: Boolean): Unit = {
+    doLoadTensorflowSavedModel(
+      savedModelBytes,
+      inputs,
+      outputs,
+      intraOpParallelismThreads,
+      interOpParallelismThreads,
+      usePerSessionThreads)
+  }
+
+  /**
+   * load a Torch model as TorchNet
+   *
+   * @param modelPath the path of the torch script
+   */
+  def doLoadPyTorch(modelPath: String): Unit = {
+    doLoadPyTorchModel(modelPath)
+  }
+
+  /**
+   * load a Torch model as TorchNet
+   *
+   * @param modelBytes the bytes of the torch script
+   */
+  def doLoadPyTorch(modelBytes: Array[Byte]): Unit = {
+    doLoadPyTorchModel(modelBytes)
   }
 
   /**
@@ -362,6 +463,44 @@ class InferenceModel(private var autoScalingEnabled: Boolean = true,
     offerModelQueue()
   }
 
+  private def doLoadTensorflowSavedModel(modelPath: String,
+                                         inputs: Array[String],
+                                         outputs: Array[String],
+                                         intraOpParallelismThreads: Int,
+                                         interOpParallelismThreads: Int,
+                                         usePerSessionThreads: Boolean): Unit = {
+    clearModelQueue()
+    this.originalModel =
+      InferenceModelFactory.loadFloatModelForTFSavedModel(modelPath,
+        inputs, outputs, intraOpParallelismThreads, interOpParallelismThreads, usePerSessionThreads)
+    offerModelQueue()
+  }
+
+  private def doLoadTensorflowSavedModel(savedModelBytes: Array[Byte],
+                                         inputs: Array[String],
+                                         outputs: Array[String],
+                                         intraOpParallelismThreads: Int,
+                                         interOpParallelismThreads: Int,
+                                         usePerSessionThreads: Boolean): Unit = {
+    clearModelQueue()
+    this.originalModel =
+      InferenceModelFactory.loadFloatModelForTFSavedModelBytes(savedModelBytes,
+        inputs, outputs, intraOpParallelismThreads, interOpParallelismThreads, usePerSessionThreads)
+    offerModelQueue()
+  }
+
+  private def doLoadPyTorchModel(modelPath: String): Unit = {
+    clearModelQueue()
+    this.originalModel = InferenceModelFactory.loadFloatModelForPyTorch(modelPath)
+    offerModelQueue()
+  }
+
+  private def doLoadPyTorchModel(modelBytes: Array[Byte]): Unit = {
+    clearModelQueue()
+    this.originalModel = InferenceModelFactory.loadFloatModelForPyTorch(modelBytes)
+    offerModelQueue()
+  }
+
   private def doLoadTensorflowModelAsOpenVINO(modelPath: String,
                                               modelType: String,
                                               pipelineConfigPath: String,
@@ -501,9 +640,9 @@ class InferenceModel(private var autoScalingEnabled: Boolean = true,
    * @return the output tensor with batch
    */
   def doPredict(inputs: JList[JList[JTensor]]): JList[JList[JTensor]] = {
-    timing(s"model predict for batch ${inputs.size()}") {
-      val batchSize = inputs.size()
-      require(batchSize > 0, "inputs size should > 0")
+    val batchSize = inputs.size()
+    require(batchSize > 0, "inputs size should > 0")
+    timing(s"model predict batch size " + batchSize) {
       predict(inputs)
     }
   }
@@ -515,9 +654,7 @@ class InferenceModel(private var autoScalingEnabled: Boolean = true,
    * @return the output activity
    */
   def doPredict(inputActivity: Activity): Activity = {
-    timing(s"model predict for activity") {
-      predict(inputActivity)
-    }
+    predict(inputActivity)
   }
 
   /**
@@ -530,7 +667,16 @@ class InferenceModel(private var autoScalingEnabled: Boolean = true,
   private def predict(inputActivity: Activity): Activity = {
     val model: AbstractModel = retrieveModel()
     try {
-      model.predict(inputActivity)
+      val begin = System.nanoTime()
+      val batchSize = inputActivity.toTensor[Float].size(1)
+      val result = model.predict(inputActivity)
+      val end = System.nanoTime()
+
+      val latency = end - begin
+      val name = s"model predict for batch ${batchSize}"
+      InferenceSupportive.logger.info(s"$name time elapsed [${latency/1e9} s, ${latency/1e6} ms].")
+
+      result
     } finally {
       model match {
         case null =>
@@ -588,7 +734,7 @@ class InferenceModel(private var autoScalingEnabled: Boolean = true,
       case null =>
       case _ => this.originalModel.release(); this.originalModel = null
     }
-    List.range(0, this.modelQueue.size()).map(_ => {
+    List.range(0, this.modelQueue.size()).foreach(_ => {
       val model = this.modelQueue.take
       this.modelQueue.remove(model)
       model.release()
@@ -606,11 +752,17 @@ class InferenceModel(private var autoScalingEnabled: Boolean = true,
         models.map(this.modelQueue.offer(_))
     }
   }
+  def setInferenceSummary(value: InferenceSummary): this.type = {
+    this.inferenceSummary = value
+    this
+  }
+
 
   def getOriginalModel: AbstractModel = originalModel
 
   override def toString: String =
     s"InferenceModel($autoScalingEnabled, $concurrentNum, $originalModel, $modelQueue)"
+
 
 }
 
