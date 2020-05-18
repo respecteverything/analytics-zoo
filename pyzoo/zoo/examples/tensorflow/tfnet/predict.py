@@ -16,7 +16,7 @@
 
 from optparse import OptionParser
 
-from zoo.pipeline.api.net import TFNet
+from zoo.tfpark import TFNet
 from zoo.common.nncontext import init_nncontext
 from zoo.feature.common import *
 from zoo.models.image.objectdetection import *
@@ -52,3 +52,5 @@ if __name__ == "__main__":
     sc = init_nncontext("TFNet Object Detection Example")
 
     predict(options.model_path, options.img_path, options.partition_num)
+    print("finished...")
+    sc.stop()

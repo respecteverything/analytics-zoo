@@ -9,25 +9,25 @@ Note: currently only **image classification** models are supported.
 
 This page contains the guide for you to run Analytics Zoo Cluster Serving, including following:
 
-* [Quick Start](#Quick-Start)
+* [Quick Start](#quick-start)
 
-* [Workflow Overview](#Workflow-Overview) 
+* [Workflow Overview](#workflow-overview) 
 
-* [Deploy Your Own Cluster Serving](#Deploy-Your-Own-Cluster-Serving)
+* [Deploy Your Own Cluster Serving](#deploy-your-own-cluster-serving)
 
-   1. [Installation](#1-Installation)
+   1. [Installation](#1-installation)
 
-   2. [Configuration](#2-Configuration) 
+   2. [Configuration](#2-configuration) 
    
-   3. [Launching Service](#3-Launching-Service)
+   3. [Launching Service](#3-launching-service)
    
-   4. [Model inference](#4-Model-inference)
+   4. [Model inference](#4-model-inference)
 
-* [Optional Operations](#Optional-Operations)
+* [Optional Operations](#optional-operations)
 
-     - [Update Model or Configurations](#Update-Model-or-Configurations)
+     - [Update Model or Configurations](#update-model-or-configurations)
 
-     - [Logs and Visualization](#Logs-and-Visualization)
+     - [Logs and Visualization](#logs-and-visualization)
 
 
 ## Quick Start
@@ -60,15 +60,15 @@ Run python program `python quick_start.py` to push data into queue and get infer
 
 Then you can see the inference output in console. 
 ```
-image: fish1.jpeg, classification-result: class: 1's prob: 0.9974158
-image: cat1.jpeg, classification-result: class: 287's prob: 0.52377725
-image: dog1.jpeg, classification-result: class: 207's prob: 0.9226527
+image: fish1.jpeg, classification-result:class: 5's prob: 0.18204997
+image: dog1.jpeg, classification-result:class: 267's prob: 0.27166227
+image: cat1.jpeg, classification-result:class: 292's prob: 0.32633427
 ```
 Wow! You made it!
 
-Note that the Cluster Serving quick start example will run on your local node only. Check the [Deploy Your Own Cluster Serving](#Deploy-Your-Own-Cluster-Serving) section for how to configure and run Cluster Serving in a distributed fashion.
+Note that the Cluster Serving quick start example will run on your local node only. Check the [Deploy Your Own Cluster Serving](#deploy-your-own-cluster-serving) section for how to configure and run Cluster Serving in a distributed fashion.
 
-For more details, you could also see the log and performance by go to `localhost:6006` in your browser and refer to [Logs and Visualization](#Logs-and-Visualization), or view the source code of `quick_start.py` [here](https://github.com/intel-analytics/analytics-zoo/blob/master/pyzoo/zoo/serving/quick_start.py), or refer to [API Guide](APIGuide.md).
+For more details, you could also see the log and performance by go to `localhost:6006` in your browser and refer to [Logs and Visualization](#logs-and-visualization), or view the source code of `quick_start.py` [here](https://github.com/intel-analytics/analytics-zoo/blob/master/pyzoo/zoo/serving/quick_start.py), or refer to [API Guide](APIGuide.md).
 
 
 ## Workflow Overview
@@ -142,23 +142,33 @@ Run `export OMP_NUM_THREADS=all` if you want to use all cores on your machine to
 Run `export OMP_NUM_THREADS=all` if you want to use all cores on your machine to do inference in parallel manner.
 ### 2. Configuration
 #### How to Config
-After [Installation](#1-Installation), you will see a config file `config.yaml` in your current working directory. This file contains all the configurations that you can customize for your Cluster Serving. See an example of `config.yaml` below.
+After [Installation](#1-installation), you will see a config file `config.yaml` in your current working directory. This file contains all the configurations that you can customize for your Cluster Serving. See an example of `config.yaml` below.
 ```
 ## Analytics Zoo Cluster Serving Config Example
 
 model:
   # model path must be set
   path: /opt/work/model
+  # the inputs of the tensorflow model, separated by ","
+  inputs:
+  # the outputs of the tensorflow model, separated by ","
+  outputs:
 data:
   # default, localhost:6379
   src:
+  # default, image (image & tensor are supported)
+  data_type: 
   # default, 3,224,224
   image_shape:
+  # must be provided given data_type is tensor. eg: [1,2] (tensor) [[1],[2,1,2],[3]] (table)
+  tensor_shape: 
+  # default, topN(1)
+  filter:
 params:
   # default, 4
   batch_size:
-  # default, 1
-  top_n:
+  # default: OFF
+  performance_mode:
 spark:
   # default, local[*], change this to spark://, yarn, k8s:// etc if you want to run on cluster
   master: local[*]
@@ -181,11 +191,25 @@ You need to put your model file into a directory and the directory could have la
 
 **Tensorflow**
 
+***Tensorflow checkpoint***
+Please refer to [freeze checkpoint example](https://github.com/intel-analytics/analytics-zoo/tree/master/pyzoo/zoo/examples/tensorflow/freeze_checkpoint)
+
+***Tensorflow frozen model***
 ```
 |-- model
    |-- frozen_graph.pb
    |-- graph_meta.json
 ```
+
+***Tensorflow saved model***
+```
+|-- model
+   |-- saved_model.pb
+   |-- variables
+       |-- variables.data-00000-of-00001
+       |-- variables.index
+```
+Note: you can specify model inputs and outputs in the config.yaml file. If the inputs or outputs are not provided,  the signature "serving_default" will be used to find input and output tensors.
 
 **Caffe**
 
@@ -220,15 +244,18 @@ You need to put your model file into a directory and the directory could have la
 Put the model in any of your local directory, and set `model:/path/to/dir`.
 
 #### Other Configuration
-The field `input` contains your input data configuration.
+The field `data` contains your input data configuration.
 
 * src: the queue you subscribe for your input data, e.g. a default config of Redis on local machine is `localhost:6379`. Note that please use the host address in your network instead of localhost or 127.0.0.1 when you run serving in cluster, and make sure other nodes in cluster could also recognize this address.
-* image_shape: the shape of your input data, e.g. a default config for pretrained imagenet is `3,224,224`. You should use the same shape of data which trained your model. In TensorFlow the format is usually HWC and in other models the format is usually CHW.
+* data_type: the type of your input data. image and tensor are supported.
+* image_shape: the shape of your image input data, e.g. a default config for pretrained imagenet is `3,224,224`. You should use the same shape of data which trained your model. In TensorFlow the format is usually HWC and in other models the format is usually CHW.
+* tensor_shape: the shape of your tensor(ndarray) or table(list of ndarray) input data. e.g. [1,2] (tensor) [[1],[2,1,2],[3]] (table) **note:** tensor_shape must be provided given data_type is tensor
+* filter: the top N classes in the prediction result. **note:** if the top-N number is larger than model output size of the the final layer, it would just return all the outputs.
 
 The field `params` contains your inference parameter configuration.
 
 * batch_size: the batch size you use for model inference. We recommend this value to be not smaller than 4 and not larger than 512. In general, using larger batch size means higher throughput, but also increase the latency between batches accordingly.
-* top_n: the top N classes in the prediction result. **note:** if the top-N number is larger than model output size of the the final layer, it would just return all the outputs.
+* performance_mode: The performance mode will utilize your CPU resource to achieve better inference performance on a single node. **Note:** numactl and net-tools should be installed in your system, and spark master should be `local[*]` in the config.yaml file.
 
 The field `spark` contains your spark configuration.
 
@@ -247,7 +274,9 @@ You can use following command to start Cluster Serving.
 ```
 cluster-serving-start
 ```
-This command will start Redis and TensorBoard if they are not running. Note that you need to provide `REDIS_HOME` environment variable as mentioned in [Installation](#1-Installation).
+This command will start Redis and TensorBoard if they are not running. Note that you need to provide `REDIS_HOME` environment variable as mentioned in [Installation](#1-installation).
+
+**NOTE:** If your input data_type is tensor(ndarray), you should run `spark-structured-streaming-cluster-serving-start` instead.
 
 #### Stop
 You can use following command to stop Cluster Serving. Data in Redis and TensorBoard service will persist.
@@ -289,7 +318,7 @@ img1_result = output_api.query('img1')
 all_result = output_api.dequeue() # the output queue is empty after this code
 ```
 #### Output Format
-Consider the code above, in [Input and Output API](#Input-and-Output-API) Section.
+Consider the code above, in [Input and Output API](#input-and-output-api) Section.
 ```
 img1_result = output_api.query('img1')
 ```
@@ -312,7 +341,14 @@ To update your model, you could replace your model file in your model directory,
 We use log to save Cluster Serving information and error. To see log, please refer to `cluster-serving.log`.
 
 #### Visualization
-TensorBoard is integrated into Cluster Serving. TensorBoard service is started with Cluster Serving. Once your serving starts, you can go to `localhost:6006` to see visualization of your serving.
+To visualize Cluster Serving performance, go to your flink job UI, default `localhost:8081`, and go to Cluster Serving job -> metrics. Add `numRecordsOut` to see total record number and `numRecordsOutPerSecond` to see throughput.
+
+See example of visualization:
+
+![Example Chart](serving-visualization.png)
+
+##### Spark Streaming Visualization
+TensorBoard is integrated into Spark Streaming Cluster Serving. TensorBoard service is started with Cluster Serving. Once your serving starts, you can go to `localhost:6006` to see visualization of your serving.
 
 Analytics Zoo Cluster Serving provides 2 attributes in Tensorboard so far, `Serving Throughput` and `Total Records Number`.
 

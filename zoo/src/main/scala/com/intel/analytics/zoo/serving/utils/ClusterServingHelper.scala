@@ -17,8 +17,9 @@
 
 package com.intel.analytics.zoo.serving.utils
 
-import java.io.{File, FileWriter, FileInputStream}
-import java.nio.file.{Files, Paths}
+import java.io.{File, FileInputStream, FileWriter}
+import java.lang
+import java.nio.file.{Files, Path, Paths}
 
 import com.intel.analytics.bigdl.Module
 import com.intel.analytics.bigdl.models.utils.ModelBroadcast
@@ -30,35 +31,23 @@ import com.intel.analytics.zoo.pipeline.inference.InferenceModel
 import java.util.LinkedHashMap
 
 import org.apache.log4j.Logger
-import scopt.OptionParser
 import org.apache.spark.rdd.RDD
-import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.SparkContext
 import org.apache.spark.sql.SparkSession
 import org.yaml.snakeyaml.Yaml
 import java.time.LocalDateTime
 
+import com.intel.analytics.zoo.serving.DataType
+import com.intel.analytics.zoo.serving.DataType.DataTypeEnumVal
+
 import scala.reflect.ClassTag
+import scala.util.parsing.json._
 
-case class LoaderParams(modelFolder: String = null,
-                        batchSize: Int = 4,
-                        topN: Int = 1,
-                        redis: String = "localhost:6379",
-                        dataShape: String = "3, 224, 224",
-
-                        // not used temporarily
-                        modelType: String = null,
-                        isInt8: Boolean = false,
-                        outputPath: String = "",
-                        task: String = "image-classification")
-
-
-case class Result(id: String, value: String)
-
-class ClusterServingHelper {
+class ClusterServingHelper(_configPath: String = "config.yaml") {
   type HM = LinkedHashMap[String, String]
 
 //  val configPath = "zoo/src/main/scala/com/intel/analytics/zoo/serving/config.yaml"
-  val configPath = "config.yaml"
+  val configPath = _configPath
 
   var lastModTime: String = null
   val logger: Logger = Logger.getLogger(getClass)
@@ -66,16 +55,20 @@ class ClusterServingHelper {
 
   var sc: SparkContext = null
 
+  var modelInputs: String = null
+  var modelOutputs: String = null
+
   var redisHost: String = null
   var redisPort: String = null
-  var batchSize: Int = 4
-  var topN: Int = 1
   var nodeNum: Int = 1
   var coreNum: Int = 1
   var engineType: String = null
   var blasFlag: Boolean = false
+  var chwFlag: Boolean = true
 
-  var dataShape = Array[Int]()
+  var dataType: DataTypeEnumVal = null
+  var dataShape: Array[Array[Int]] = Array[Array[Int]]()
+  var filter: String = "topN"
 
   var logFile: FileWriter = null
   var logErrorFlag: Boolean = true
@@ -88,12 +81,6 @@ class ClusterServingHelper {
   var weightPath: String = null
   var defPath: String = null
   var dirPath: String = null
-
-  /**
-   * environment variables
-   */
-  var kmpBlockTime: String = null
-
 
   /**
    * Initialize the parameters by loading config file
@@ -110,27 +97,11 @@ class ClusterServingHelper {
     // parse model field
     val modelConfig = configList.get("model").asInstanceOf[HM]
     val modelFolder = getYaml(modelConfig, "path", null)
-
+    modelInputs = getYaml(modelConfig, "inputs", "")
+    modelOutputs = getYaml(modelConfig, "outputs", "")
 
     parseModelType(modelFolder)
 
-
-    // parse data field
-    val dataConfig = configList.get("data").asInstanceOf[HM]
-    val redis = getYaml(dataConfig, "src", "localhost:6379")
-    require(redis.split(":").length == 2, "Your redis host " +
-      "and port are not valid, please check.")
-    redisHost = redis.split(":").head.trim
-    redisPort = redis.split(":").last.trim
-    val shape = getYaml(dataConfig, "image_shape", "3,224,224")
-    val shapeList = shape.split(",")
-    require(shapeList.size == 3, "Your data shape must has dimension as 3")
-    for (i <- shapeList) {
-      dataShape = dataShape :+ i.trim.toInt
-    }
-
-    val paramsConfig = configList.get("params").asInstanceOf[HM]
-    batchSize = getYaml(paramsConfig, "batch_size", "4").toInt
 
     /**
      * reserved here to change engine type
@@ -139,24 +110,6 @@ class ClusterServingHelper {
      * Once BigDL supports it, engine type could be set here
      * And also other frameworks supporting multiple engine type
      */
-    // engine Type need to be used on executor so do not set here
-//    engineType = getYaml(paramsConfig, "engine_type", "mklblas")
-    topN = getYaml(paramsConfig, "top_n", "1").toInt
-
-//    val logConfig = configList.get("log").asInstanceOf[HM]
-//    logErrorFlag = if (getYaml(logConfig, "error", "y") ==
-//      "y") true else false
-//    logSummaryFlag = if (getYaml(logConfig, "summary", "y") ==
-//      "y") true else false
-//
-//    if (logErrorFlag) {
-//      logFile = {
-//        val logF = new File("./cluster_serving.log")
-//        if (Files.exists(Paths.get("./cluster_serving.log")))
-//          logF.createNewFile()
-//        new FileWriter(logF)
-//      }
-//    }
 
     logFile = {
       val logF = new File("./cluster-serving.log")
@@ -166,6 +119,67 @@ class ClusterServingHelper {
       new FileWriter(logF, true)
     }
 
+    if (modelType.startsWith("tensorflow")) {
+      chwFlag = false
+    }
+    // parse data field
+    val dataConfig = configList.get("data").asInstanceOf[HM]
+    val redis = getYaml(dataConfig, "src", "localhost:6379")
+    require(redis.split(":").length == 2, "Your redis host " +
+      "and port are not valid, please check.")
+    redisHost = redis.split(":").head.trim
+    redisPort = redis.split(":").last.trim
+    val dataTypeStr = getYaml(dataConfig, "data_type", "image").toLowerCase()
+    dataType = dataTypeStr match {
+      case "image" =>
+        DataType.IMAGE
+      case "tensor" =>
+        DataType.TENSOR
+      case _ =>
+        logError("Invalid data type, please check your data_type")
+        null
+    }
+    val shapeList = dataType match {
+      case DataType.IMAGE =>
+        val shape = getYaml(dataConfig, "image_shape", "3,224,224")
+        val shapeList = shape.split(",").map(x => x.trim.toInt)
+        require(shapeList.size == 3, "Your data shape must has dimension as 3")
+        Array(shapeList)
+      case DataType.TENSOR =>
+        val shape = getYaml(dataConfig, "tensor_shape", null)
+        val jsonList: Option[Any] = JSON.parseFull(shape)
+        jsonList match {
+          case Some(list) =>
+            val l: List[Any] = list.asInstanceOf[List[Any]]
+            val converted = l.head match {
+              case _: lang.Double =>
+                List(l.map(_.asInstanceOf[Double].toInt).toArray)
+              case _: List[Double] =>
+                l.map(tensorShape => tensorShape.asInstanceOf[List[Double]].map(x => x.toInt)
+                  .toArray)
+              case _ =>
+                logError(s"Invalid shape format, please check your tensor_shape, your input is " +
+                  s"${shape}")
+                null
+            }
+
+            converted.toArray
+          case None => logError(s"Invalid shape format, please check your tensor_shape, your " +
+            s"input is ${shape}")
+            null
+        }
+      case _ =>
+        logError("Invalid data type, please check your data_type")
+        null
+    }
+    for (i <- shapeList) {
+      dataShape = dataShape :+ i
+    }
+
+    filter = getYaml(dataConfig, "filter", "topN(1)")
+
+    val paramsConfig = configList.get("params").asInstanceOf[HM]
+    coreNum = getYaml(paramsConfig, "core_number", "4").toInt
 
     if (modelType == "caffe" || modelType == "bigdl") {
       if (System.getProperty("bigdl.engineType", "mklblas")
@@ -215,8 +229,8 @@ class ClusterServingHelper {
    * @return
    */
   def getYaml(configList: HM, key: String, default: String): String = {
-
-    val configValue = if (configList.get(key).isInstanceOf[java.lang.Integer]) {
+    val configValue = if (configList.get(key).isInstanceOf[java.lang.Integer] ||
+      configList.get(key).isInstanceOf[java.util.ArrayList[Integer]]) {
       String.valueOf(configList.get(key))
     } else {
       configList.get(key)
@@ -225,12 +239,12 @@ class ClusterServingHelper {
     if (configValue == null) {
       if (default == null) throw new Error(configList.toString + key + " must be provided")
       else {
-        println(configList.toString + key + " is null, using default.")
+//        println(configList.toString + key + " is null, using default.")
         return default
       }
     }
     else {
-      println(configList.toString + key + " getted: " + configValue)
+//      println(configList.toString + key + " getted: " + configValue)
       logger.info(configList.toString + key + " getted: " + configValue)
       return configValue
     }
@@ -243,12 +257,8 @@ class ClusterServingHelper {
     val conf = NNContext.createSparkConf().setAppName("Cluster Serving")
       .set("spark.redis.host", redisHost)
       .set("spark.redis.port", redisPort)
-    if (kmpBlockTime != null) {
-      conf.set("spark.executorEnv", "KMP_BLOCKTIME=" + kmpBlockTime)
-    }
     sc = NNContext.initNNContext(conf)
     nodeNum = EngineRef.getNodeNumber()
-    coreNum = EngineRef.getCoreNumber()
 
   }
 
@@ -293,12 +303,26 @@ class ClusterServingHelper {
     // perhaps machine not supporting DNN would not accept quantize
     modelType match {
       case "caffe" => model.doLoadCaffe(defPath, weightPath, blas = blasFlag)
-      case "bigdl" => model.doLoad(weightPath, blas = blasFlag)
-
-      case "tensorflow" => model.doLoadTF(weightPath, coreNum, 1, true)
+      case "bigdl" => model.doLoadBigDL(weightPath, blas = blasFlag)
+      case "tensorflowFrozenModel" =>
+        model.doLoadTensorflow(weightPath, "frozenModel", coreNum, 1, true)
+      case "tensorflowSavedModel" =>
+        modelInputs = modelInputs.filterNot((x: Char) => x.isWhitespace)
+        modelOutputs = modelOutputs.filterNot((x: Char) => x.isWhitespace)
+        val inputs = if (modelInputs == "") {
+          null
+        } else {
+          modelInputs.split(",")
+        }
+        val outputs = if (modelOutputs == "") {
+          null
+        } else {
+          modelOutputs.split(",")
+        }
+        model.doLoadTensorflow(weightPath, "savedModel", inputs, outputs)
       case "pytorch" => model.doLoadPyTorch(weightPath)
       case "keras" => logError("Keras currently not supported in Cluster Serving")
-      case "openvino" => model.doLoadOpenVINO(defPath, weightPath, batchSize)
+      case "openvino" => model.doLoadOpenVINO(defPath, weightPath, coreNum)
       case _ => logError("Invalid model type, please check your model directory")
     }
     model
@@ -354,6 +378,19 @@ class ClusterServingHelper {
    * @param location
    */
   def parseModelType(location: String): Unit = {
+    /**
+     * Download file to local if the scheme is remote
+     * Currently support hdfs, s3
+     */
+    val scheme = location.split(":").head
+    val localModelPath = if (scheme == "file" || location.split(":").length <= 1) {
+      location.split("file://").last
+    } else {
+      val path = Files.createTempDirectory("model")
+      val dstPath = path.getParent + "/" + path.getFileName
+      FileUtils.copyToLocal(location, dstPath)
+      dstPath
+    }
 
     /**
      * Initialize all relevant parameters at first
@@ -362,10 +399,10 @@ class ClusterServingHelper {
     weightPath = null
     defPath = null
 
-    kmpBlockTime = null
+    var variablesPathExist = false
 
     import java.io.File
-    val f = new File(location)
+    val f = new File(localModelPath)
     val fileList = f.listFiles
 
     // model type is always null, not support pass model type currently
@@ -373,7 +410,7 @@ class ClusterServingHelper {
 
       for (file <- fileList) {
         val fName = file.getName
-        val fPath = new File(location, fName).toString
+        val fPath = new File(localModelPath, fName).toString
         if (fName.endsWith("caffemodel")) {
           throwOneModelError(true, false, true)
           weightPath = fPath
@@ -386,8 +423,12 @@ class ClusterServingHelper {
         // ckpt seems not supported
         else if (fName.endsWith("pb")) {
           throwOneModelError(true, false, true)
-          weightPath = location
-          modelType = "tensorflow"
+          weightPath = localModelPath
+          if (variablesPathExist) {
+            modelType = "tensorflowSavedModel"
+          } else {
+            modelType = "tensorflowFrozenModel"
+          }
         }
         else if (fName.endsWith("pt")) {
           throwOneModelError(true, false, true)
@@ -408,11 +449,17 @@ class ClusterServingHelper {
           throwOneModelError(true, false, true)
           weightPath = fPath
           modelType = "openvino"
-          kmpBlockTime = "20"
         }
         else if (fName.endsWith("xml")) {
           throwOneModelError(false, true, false)
           defPath = fPath
+        }
+        else if (fName.equals("variables")) {
+          if (modelType != null && modelType.equals("tensorflowFrozenModel")) {
+            modelType = "tensorflowSavedModel"
+          } else {
+            variablesPathExist = true
+          }
         }
 
       }

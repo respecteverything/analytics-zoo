@@ -28,21 +28,21 @@ import org.slf4j.LoggerFactory
 import org.tensorflow.framework.{GraphDef, MetaGraphDef}
 import org.tensorflow.op.Ops
 import org.tensorflow.op.core.Placeholder
-import org.tensorflow.{DataType, SavedModelBundle}
+import org.tensorflow.{DataType, Graph, SavedModelBundle}
 
 import scala.reflect.ClassTag
 
-
 private[zoo] class TFNetForInference(graphRunner: GraphRunner,
-                                    inputs: Array[String],
-                                    inputTypes: Array[Int],
-                                    outputs: Array[String],
-                                    variables: Array[String],
-                                    variableTypes: Array[Int],
-                                    variableAssignPlaceholders: Array[String],
-                                    assignVariableOps: Array[String],
-                                    initWeights: Array[Tensor[Float]],
-                                    initOp: Option[String])
+                                     inputs: Array[String],
+                                     inputTypes: Array[Int],
+                                     outputs: Array[String],
+                                     outputTypes: Array[Int],
+                                     variables: Array[String],
+                                     variableTypes: Array[Int],
+                                     variableAssignPlaceholders: Array[String],
+                                     assignVariableOps: Array[String],
+                                     initWeights: Array[Tensor[Float]],
+                                     initOp: Option[String])
   extends AbstractModule[Activity, Activity, Float] with Predictable[Float] {
 
   protected val module: Module[Float] = this
@@ -100,12 +100,12 @@ private[zoo] class TFNetForInference(graphRunner: GraphRunner,
   private def runInitOp(): Unit = {
     graphRunner.run(
       input = Vector.empty,
+      inputNames = Vector.empty,
       inputTypes = Vector.empty,
       output = Vector.empty,
-      inputNames = Vector.empty,
       outputNames = Vector.empty,
-      targets = Vector(initOp.get)
-    )
+      outputTypes = Vector.empty,
+      targets = Vector(initOp.get))
   }
 
   private def setVariableIntoTF(weights: Array[Tensor[Float]],
@@ -114,18 +114,20 @@ private[zoo] class TFNetForInference(graphRunner: GraphRunner,
                                 assignOps: Array[String]) = {
     graphRunner.run(
       input = weights.toVector,
+      inputNames = inputNames.toVector,
       inputTypes = variableTypes.toVector,
       output = Vector.empty,
-      inputNames = inputNames.toVector,
       outputNames = Vector.empty,
-      targets = assignOps.toVector
-    )
+      outputTypes = Vector.empty,
+      targets = assignOps.toVector)
   }
 
   @transient
   private lazy val variableInited = {
-    setVariableIntoTF(weights, variableAssignPlaceholders,
-      variableTypes.map(TFUtils.tfenum2datatype), assignVariableOps)
+    if (weights.length > 0) {
+      setVariableIntoTF(weights, variableAssignPlaceholders,
+        variableTypes.map(TFUtils.tfenum2datatype), assignVariableOps)
+    }
     true
   }
 
@@ -147,12 +149,10 @@ private[zoo] class TFNetForInference(graphRunner: GraphRunner,
 
       val types = inputTypes.toVector.map(TFUtils.tfenum2datatype)
 
-      graphRunner.run(
-        input = feeds.result(),
-        inputTypes = types,
-        output = graphOutputs,
-        inputNames = inputs.toVector,
-        outputNames = outputs.toVector,
+      val outputTypes = Vector.fill(outputs.length)(DataType.FLOAT)
+
+      graphRunner.run(input = feeds.result(), inputNames = inputs.toVector, inputTypes = types,
+        output = graphOutputs, outputNames = outputs.toVector, outputTypes = outputTypes,
         targets = Vector.empty)
     }
 
@@ -220,7 +220,8 @@ object TFNetForInference {
                      signature: Option[String],
                      inputs: Option[Array[String]],
                      outputs: Option[Array[String]],
-                     sessionConfig: Array[Byte]): TFNetForInference = {
+                     sessionConfig: Array[Byte],
+                     tableInitOp: Option[String] = None): TFNetForInference = {
 
     if (tag.isEmpty) {
       logger.warn(s"Loading TensorFlow SavedModel: " +
@@ -229,19 +230,30 @@ object TFNetForInference {
     val savedModelBundle = SavedModelBundle.load(modelPath, tag.getOrElse(DEFAULT_TAG))
 
     val metaGraphDef = MetaGraphDef.parseFrom(savedModelBundle.metaGraphDef())
-    val initOp = getInitOp(metaGraphDef)
+    val initOp = if (tableInitOp.isDefined) tableInitOp else getInitOp(metaGraphDef)
 
-    val (inputNames, outputNames) = if (!(inputs.isDefined && outputs.isDefined)) {
+    val (inputNames, outputNames) = if (inputs.isEmpty || outputs.isEmpty) {
+
+      if (inputs.isEmpty) {
+        logger.warn("Loading TensorFlow SavedModel: inputs is not defined, finding inputs " +
+          "in signature")
+      }
+
+      if (outputs.isEmpty) {
+        logger.warn("Loading TensorFlow SavedModel: outputs is not defined, finding outputs " +
+          "in signature")
+      }
+
       if (signature.isEmpty) {
         logger.warn("Loading TensorFlow SavedModel: SavedModel signature is not defined," +
-          s"using <$DEFAULT_SIGNATURE>")
+          s"using default signature <$DEFAULT_SIGNATURE>")
       }
-      getInputOutputNames(metaGraphDef, signature.getOrElse(DEFAULT_SIGNATURE))
+
+      val (inputNameCandidate, outputNameCandidate) = getInputOutputNames(metaGraphDef,
+        signature.getOrElse(DEFAULT_SIGNATURE))
+
+      (inputs.getOrElse(inputNameCandidate), outputs.getOrElse(outputNameCandidate))
     } else {
-      if (inputs.isEmpty || outputs.isEmpty) {
-        throw new IllegalArgumentException("inputs and outputs tensor names must be defined" +
-          " if signature is not defined")
-      }
       (inputs.get, outputs.get)
     }
 
@@ -339,16 +351,10 @@ object TFNetForInference {
       }
     }.toArray
 
-    val inputTypes = inputNames.map { name =>
-      val opAndPort = name.split(":")
-      val op = opAndPort.head
-      val port = opAndPort(1)
-      val opRef = graph.operation(op)
-      if (opRef == null) {
-        throw new IllegalArgumentException(s"Cannot find input op <$name>")
-      }
-      TFUtils.tfdatatype2enum(opRef.output(port.toInt).dataType())
-    }
+
+    val inputTypes = inputNames.map(name2type(graph))
+
+    val outputTypes = outputNames.map(name2type(graph))
 
 
 
@@ -359,6 +365,7 @@ object TFNetForInference {
       inputs = inputNames,
       inputTypes = inputTypes,
       outputs = outputNames,
+      outputTypes = outputTypes,
       variables = readVariableNames.toArray,
       variableTypes = dataTypes.map(_.getNumber).toArray,
       variableAssignPlaceholders = placeholderNames.toArray,
@@ -366,7 +373,18 @@ object TFNetForInference {
       initWeights = weights, initOp)
   }
 
-  def getInputOutputNames(metaGraphDef: MetaGraphDef,
+  private def name2type(graph: Graph)(name: String) = {
+    val opAndPort = name.split(":")
+    val op = opAndPort.head
+    val port = opAndPort(1)
+    val opRef = graph.operation(op)
+    if (opRef == null) {
+      throw new IllegalArgumentException(s"Cannot find input op <$name>")
+    }
+    TFUtils.tfdatatype2enum(opRef.output(port.toInt).dataType())
+  }
+
+  private def getInputOutputNames(metaGraphDef: MetaGraphDef,
                           signature: String): (Array[String], Array[String]) = {
     val signatureDef = metaGraphDef.getSignatureDefOrThrow(signature)
     val inputMap = signatureDef.getInputsMap

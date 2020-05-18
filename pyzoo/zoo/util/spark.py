@@ -18,13 +18,11 @@ import os
 import glob
 
 from pyspark import SparkContext
-
 from zoo.common.nncontext import init_spark_conf
-
 from zoo import init_nncontext
 
 
-class SparkRunner():
+class SparkRunner:
     def __init__(self,
                  spark_log_level="WARN",
                  redirect_spark_log=True):
@@ -108,17 +106,17 @@ class SparkRunner():
                             "Please set it manually by python_location")
         return out.strip()
 
-    def _get_bigdl_jar_name_on_driver(self):
+    def _get_bigdl_classpath_jar_name_on_driver(self):
         from bigdl.util.engine import get_bigdl_classpath
         bigdl_classpath = get_bigdl_classpath()
         assert bigdl_classpath, "Cannot find bigdl classpath"
-        return bigdl_classpath.split("/")[-1]
+        return bigdl_classpath, bigdl_classpath.split("/")[-1]
 
-    def _get_zoo_jar_name_on_driver(self):
+    def _get_zoo_classpath_jar_name_on_driver(self):
         from zoo.util.engine import get_analytics_zoo_classpath
         zoo_classpath = get_analytics_zoo_classpath()
         assert zoo_classpath, "Cannot find Analytics-Zoo classpath"
-        return zoo_classpath.split("/")[-1]
+        return zoo_classpath, zoo_classpath.split("/")[-1]
 
     def _assemble_zoo_classpath_for_executor(self):
         conda_env_path = "/".join(self._detect_python_location().split("/")[:-2])
@@ -128,9 +126,9 @@ class SparkRunner():
         python_interpreter_name = python_interpreters[0].split("/")[-1]
         prefix = "{}/lib/{}/site-packages/".format(self.PYTHON_ENV, python_interpreter_name)
         return ["{}/zoo/share/lib/{}".format(prefix,
-                                             self._get_zoo_jar_name_on_driver()),
+                                             self._get_zoo_classpath_jar_name_on_driver()[1]),
                 "{}/bigdl/share/lib/{}".format(prefix,
-                                               self._get_bigdl_jar_name_on_driver())
+                                               self._get_bigdl_classpath_jar_name_on_driver()[1])
                 ]
 
     def init_spark_on_local(self, cores, conf=None, python_location=None):
@@ -155,6 +153,7 @@ class SparkRunner():
                            extra_executor_memory_for_ray=None,
                            extra_python_lib=None,
                            penv_archive=None,
+                           additional_archive=None,
                            hadoop_user_name="root",
                            spark_yarn_archive=None,
                            spark_conf=None,
@@ -164,15 +163,21 @@ class SparkRunner():
         os.environ['PYSPARK_PYTHON'] = "{}/bin/python".format(self.PYTHON_ENV)
 
         def _yarn_opt(jars):
-            command = " --archives {}#{} --num-executors {} " \
+
+            archive = "{}#{}".format(penv_archive, self.PYTHON_ENV)
+            if additional_archive:
+                archive = archive + "," + additional_archive
+            command = " --archives {} --num-executors {} " \
                       " --executor-cores {} --executor-memory {}". \
-                format(penv_archive, self.PYTHON_ENV, num_executor, executor_cores, executor_memory)
+                format(archive, num_executor, executor_cores, executor_memory)
 
             if extra_python_lib:
                 command = command + " --py-files {} ".format(extra_python_lib)
             if jars:
                 command = command + " --jars {}".format(jars)
-            return command
+            return command + " --driver-class-path {}:{}".\
+                format(self._get_zoo_classpath_jar_name_on_driver()[0],
+                       self. _get_bigdl_classpath_jar_name_on_driver()[0])
 
         def _submit_opt():
             conf = {
@@ -184,7 +189,7 @@ class SparkRunner():
             if extra_executor_memory_for_ray:
                 conf["spark.executor.memoryOverhead"] = extra_executor_memory_for_ray
             if spark_yarn_archive:
-                conf.insert("spark.yarn.archive", spark_yarn_archive)
+                conf["spark.yarn.archive"] = spark_yarn_archive
             return " --master yarn --deploy-mode client" + _yarn_opt(jars) + ' pyspark-shell ', conf
 
         pack_env = False
@@ -206,6 +211,8 @@ class SparkRunner():
                     zoo_bigdl_path_on_executor, spark_conf["spark.executor.extraClassPath"])
             else:
                 spark_conf["spark.executor.extraClassPath"] = zoo_bigdl_path_on_executor
+
+            spark_conf["spark.executorEnv.PYTHONHOME"] = self.PYTHON_ENV
 
             for item in spark_conf.items():
                 conf[str(item[0])] = str(item[1])

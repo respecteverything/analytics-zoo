@@ -18,9 +18,12 @@ package com.intel.analytics.zoo.pipeline.api.net
 
 import com.intel.analytics.bigdl.tensor.Tensor
 import com.intel.analytics.bigdl.utils.{LayerException, T}
+import com.intel.analytics.zoo.tfpark.TFUtils
+import org.apache.commons.lang.StringUtils
 import org.apache.spark.serializer.KryoSerializer
 import org.apache.spark.SparkConf
 import org.scalatest.{BeforeAndAfter, FlatSpec, Matchers}
+import org.tensorflow.{Tensor => TFTensor}
 
 
 class TFNetSpec extends FlatSpec with Matchers with BeforeAndAfter {
@@ -155,15 +158,36 @@ class TFNetSpec extends FlatSpec with Matchers with BeforeAndAfter {
     output.size() should be (Array(4, 10))
   }
 
-
-  "TFNet" should "work with String input" in {
-    val resource = getClass().getClassLoader().getResource("tfnet_string")
-
-    val stringTensor = Tensor[String](Array("123.0", "456.0"), Array[Int](2))
-    val net = TFNet(resource.getPath)
-    val result = net.forward(stringTensor)
-
-    result.toTensor[Float] should be (Tensor[Float](Array(123.0f, 456.0f), Array(2)))
+  "TFNet" should "work with saved_model with signature and inputs"  in {
+    val resource = getClass().getClassLoader().getResource("saved-model-signature")
+    val tfnet = TFNet.fromSavedModel(resource.getPath,
+      inputs = Array("Placeholder:0"), outputs = null)
+    val output = tfnet.forward(Tensor.ones[Float](4, 4)).toTensor[Float].clone()
+    output.size() should be (Array(4, 10))
   }
 
+  "TFNet" should "work with saved_model with signature and outputs"  in {
+    val resource = getClass().getClassLoader().getResource("saved-model-signature")
+    val tfnet = TFNet.fromSavedModel(resource.getPath,
+      inputs = null,
+      outputs = Array("dense/BiasAdd:0"))
+    val output = tfnet.forward(Tensor.ones[Float](4, 4)).toTensor[Float].clone()
+    output.size() should be (Array(4, 10))
+  }
+
+  "TFNet" should "output TFTensor of String" in {
+    TFNet
+
+    import com.intel.analytics.zoo.tfpark.TFTensorNumeric.NumericByteArray
+    val inputs = Array.tabulate(20) { i =>
+      val strLen = (1 << i) + 2
+      StringUtils.repeat("1", strLen)
+    }
+    val t = TFTensor.create(inputs.map(_.getBytes("utf-8")))
+    val tt = Tensor[Array[Byte]]()
+    TFUtils.tf2bigdl(t, tt)
+    val result = tt.storage().array().map(new String(_, "utf-8")).toSeq
+
+    result should be (inputs.toSeq)
+  }
 }

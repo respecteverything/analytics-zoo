@@ -13,16 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import time
 from unittest import TestCase
 
 import numpy as np
 import psutil
 import pytest
 import ray
-import time
 
 from zoo import init_spark_on_local
-from zoo.ray.util.raycontext import RayContext
+from zoo.ray import RayContext
 
 np.random.seed(1337)  # for reproducibility
 
@@ -42,7 +42,7 @@ class TestUtil(TestCase):
             ray_ctx = RayContext(sc=sc, object_store_memory="1g")
             ray_ctx.init()
             actors = [TestRay.remote() for i in range(0, node_num)]
-            print([ray.get(actor.hostname.remote()) for actor in actors])
+            print(ray.get([actor.hostname.remote() for actor in actors]))
             ray_ctx.stop()
             time.sleep(3)
             # repeat
@@ -50,7 +50,7 @@ class TestUtil(TestCase):
             ray_ctx = RayContext(sc=sc, object_store_memory="1g")
             ray_ctx.init()
             actors = [TestRay.remote() for i in range(0, node_num)]
-            print([ray.get(actor.hostname.remote()) for actor in actors])
+            print(ray.get([actor.hostname.remote() for actor in actors]))
             ray_ctx.stop()
             sc.stop()
             time.sleep(3)
